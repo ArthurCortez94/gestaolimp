@@ -1,0 +1,318 @@
+POST Recebido: Array
+(
+    [ordem_id] => 101
+    [observacao_aceite] => 
+    [aceitar] => 
+)
+
+Ordem ID: 101
+Ação: Aceitar
+Inserido Aceito com observação: 
+POST Recebido: Array
+(
+    [ordem_id] => 101
+    [observacao_aceite] => 
+    [aceitar] => 
+)
+
+Ordem ID: 101
+Ação: Aceitar
+Atualizado para Aceito com observação: 
+POST Recebido: Array
+(
+    [ordem_id] => 100
+    [observacao_aceite] => 
+    [aceitar] => 
+)
+
+Ordem ID: 100
+Ação: Aceitar
+Atualizado para Aceito com observação: 
+POST Recebido: Array
+(
+    [ordem_id] => 101
+    [observacao_aceite] => 
+    [alterar_aceite] => 
+)
+
+Ordem ID: 101
+Ação: Aceitar/Alterar Aceite
+Atualizado para Aceito com observação: 
+POST Recebido: Array
+(
+    [ordem_id] => 101
+    [motivo_recusa] => teste
+    [recusar] => 
+)
+
+Ordem ID: 101
+Ação: Recusar
+Atualizado para Recusado com motivo: teste
+POST Recebido: Array
+(
+    [ordem_id] => 101
+    [observacao_aceite] => 
+    [aceitar] => 
+)
+
+Ordem ID: 101
+Ação: Aceitar/Alterar Aceite
+Atualizado para Aceito com observação: 
+POST Recebido: Array
+(
+    [ordem_id] => 101
+    [hora_inicio] => 08:12
+    [hora_fim] => 10:13
+    [produtos_usados] => Pluri e Alvfresh Padrão
+    [servicos_adicionais] => Coletamos um tapete
+    [observacoes_finalizacao] => Cobrar Pix
+    [realizado] => 
+)
+
+Ordem ID: 101
+Ação: Realizado
+POST Recebido: Array
+(
+    [ordem_id] => 100
+    [motivo_recusa] => teste
+    [recusar] => 
+)
+
+Ordem ID: 100
+Ação: Recusar
+Atualizado para Recusado com motivo: teste
+POST Recebido: Array
+(
+    [ordem_id] => 100
+    [observacao_aceite] => 
+    [aceitar] => 
+)
+
+Ordem ID: 100
+Ação: Aceitar/Alterar Aceite
+Atualizado para Aceito com observação: 
+Acesso negado - user_id: 2, cargo: admin
+Acesso negado - user_id: 2, cargo: admin
+Acesso negado - user_id: 5, cargo: tecnico
+POST Recebido: Array
+(
+    [ordem_id] => 101
+    [novo_tecnico_id] => 5
+    [reatribuir_tecnico] => 
+)
+
+POST Recebido: Array
+(
+    [ordem_id] => 100
+    [confirmar_conclusao] => 
+)
+
+POST Recebido: Array
+(
+    [ordem_id] => 100
+    [confirmar_conclusao] => 
+)
+
+POST Recebido: Array
+(
+    [ordem_id] => 101
+    [confirmar_conclusao] => 
+)
+
+POST Recebido: Array
+(
+    [ordem_id] => 100
+    [confirmar_conclusao] => 
+)
+
+POST Recebido: Array
+(
+    [ordem_id] => 101
+    [confirmar_conclusao] => 
+)
+
+POST Recebido: Array
+(
+    [ordem_id] => 101
+    [reabrir_retorno] => 
+)
+
+POST Recebido: Array
+(
+    [ordem_id] => 100
+    [observacao_aceite] => 
+    [aceitar] => 
+)
+
+Ordem ID: 100
+Ação: Aceitar
+Atualizado para Aceito com observação: 
+POST Recebido: Array
+(
+    [ordem_id] => 100
+    [observacao_aceite] => 
+    [aceitar] => 
+)
+
+Ordem ID: 100
+Ação: Aceitar
+Atualizado para Aceito com observação: 
+POST Recebido: Array
+(
+    [ordem_id] => 100
+    [observacao_aceite] => ok
+    [aceitar] => 
+)
+
+Ordem ID: 100
+Ação: Aceitar
+Atualizado para Aceito com observação: ok
+POST Recebido: Array
+(
+    [ordem_id] => 100
+    [observacao_aceite] => 
+    [aceitar] => 
+)
+
+Ordem ID: 100
+Ação: Aceitar
+Atualizado para Aceito com observação: 
+POST Recebido: Array
+(
+    [ordem_id] => 101
+    [observacao_aceite] => 
+    [aceitar] => 
+)
+
+Ordem ID: 101
+Ação: Aceitar
+Erro: SQLSTATE[01000]: Warning: 1265 Data truncated for column 'status' at row 1
+POST Recebido: Array
+(
+    [ordem_id] => 101
+    [observacao_aceite] => 
+    [aceitar] => 
+)
+
+Ordem ID: 101
+Ação: Aceitar
+Erro: SQLSTATE[01000]: Warning: 1265 Data truncated for column 'status' at row 1
+POST Recebido: Array
+(
+    [ordem_id] => 101
+    [observacao_aceite] => 
+    [aceitar] => 
+)
+
+Ordem ID: 101
+Ação: Aceitar
+Aceitação registrada com observação: 
+POST Recebido: Array
+(
+    [ordem_id] => 101
+    [hora_inicio] => 09:35
+    [hora_fim] => 10:35
+    [produtos_usados] => Padrão
+    [servicos_adicionais] => 
+    [observacoes_finalizacao] => 
+    [realizado] => 
+)
+
+Ordem ID: 101
+Ação: Realizado
+Status atualizado para Concluída
+Acesso negado - user_id: 5, cargo: tecnico
+POST Recebido: Array
+(
+    [ordem_id] => 100
+    [remover_aceite] => 
+)
+
+Ordem ID: 100
+Ação: Remover Aceite
+Linhas afetadas ao remover aceite: 1
+POST Recebido: Array
+(
+    [ordem_id] => 100
+    [observacao_aceite] => 
+    [aceitar] => 
+)
+
+Ordem ID: 100
+Ação: Aceitar
+Aceitação registrada com observação: 
+POST Recebido: Array
+(
+    [ordem_id] => 100
+    [hora_inicio] => 09:49
+    [hora_fim] => 10:49
+    [produtos_usados] => 
+    [servicos_adicionais] => 
+    [observacoes_finalizacao] => 
+    [realizado] => 
+)
+
+Ordem ID: 100
+Ação: Realizado
+Status atualizado para Concluída
+POST Recebido: Array
+(
+    [ordem_id] => 101
+    [upload_fotos] => 
+)
+
+Ordem ID: 101
+Ação: Upload Fotos
+Foto enviada: /ultralimp/uploads/fotos_servico/ordem_101/67d425f04836b.jpg
+POST Recebido: Array
+(
+    [ordem_id] => 110
+    [observacao_aceite] => 
+    [aceitar] => 
+)
+
+Ordem ID: 110
+Ação: Aceitar
+Aceitação registrada com observação: 
+POST Recebido: Array
+(
+    [ordem_id] => 110
+    [hora_inicio] => 15:27
+    [hora_fim] => 16:27
+    [produtos_usados] => Padrão 
+    [servicos_adicionais] => Puff
+    [observacoes_finalizacao] => Rasgou 
+    [realizado] => 
+)
+
+Ordem ID: 110
+Ação: Realizado
+Status atualizado para Concluída
+POST Recebido: Array
+(
+    [ordem_id] => 110
+    [hora_inicio] => 15:27
+    [hora_fim] => 16:27
+    [produtos_usados] => Padrão 
+    [servicos_adicionais] => Puff
+    [observacoes_finalizacao] => Rasgou 
+    [realizado] => 
+)
+
+Ordem ID: 110
+Ação: Realizado
+Status atualizado para Concluída
+POST Recebido: Array
+(
+    [ordem_id] => 110
+    [hora_inicio] => 15:27
+    [hora_fim] => 16:27
+    [produtos_usados] => Padrão 
+    [servicos_adicionais] => Puff
+    [observacoes_finalizacao] => Rasgou 
+    [realizado] => 
+)
+
+Ordem ID: 110
+Ação: Realizado
+Status atualizado para Concluída
