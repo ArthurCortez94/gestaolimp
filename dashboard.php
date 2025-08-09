@@ -235,8 +235,8 @@ try {
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
-            --primary: #2563EB;
-            --primary-dark: #1D4ED8;
+            --primary: #1E3A8A;
+            --primary-dark: #0F2F6B;
             --secondary: #10B981;
             --secondary-dark: #059669;
             --accent: #F59E0B;
@@ -251,15 +251,17 @@ try {
             --dark: #0F172A;
             --white: #FFFFFF;
             --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-            --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-            --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -1px rgba(0, 0, 0, 0.04);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04);
+            --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.08), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
             --gradient-primary: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
             --gradient-secondary: linear-gradient(135deg, var(--secondary) 0%, var(--secondary-dark) 100%);
             --gradient-accent: linear-gradient(135deg, var(--accent) 0%, var(--accent-dark) 100%);
             --border-radius: 12px;
             --border-radius-lg: 16px;
             --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            --chart-grid: rgba(100, 116, 139, 0.2);
+            --chart-text: #475569;
         }
 
         * {
@@ -268,7 +270,7 @@ try {
 
         body {
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, var(--light) 0%, #E2E8F0 100%);
+            background: var(--light-gray);
             color: var(--dark);
             line-height: 1.6;
             padding-top: 80px;
@@ -295,7 +297,7 @@ try {
             right: 0;
             bottom: 0;
             background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="grain" width="100" height="100" patternUnits="userSpaceOnUse"><circle cx="50" cy="50" r="1" fill="rgba(255,255,255,0.1)"/></pattern></defs><rect width="100" height="100" fill="url(%23grain)"/></svg>');
-            opacity: 0.3;
+            opacity: 0.08;
         }
 
         .header-section .content {
@@ -852,6 +854,60 @@ try {
         ::-webkit-scrollbar-thumb:hover {
             background: var(--primary);
         }
+
+        /* Modo escuro minimalista */
+        html[data-theme='dark'] {
+            --light: #0B1220;
+            --light-gray: #0B1220;
+            --dark: #E5E7EB;
+            --white: #0F172A;
+            --gray: #9CA3AF;
+            --chart-grid: rgba(148, 163, 184, 0.2);
+            --chart-text: #CBD5E1;
+        }
+
+        html[data-theme='dark'] body {
+            background: var(--light-gray);
+            color: var(--dark);
+        }
+
+        html[data-theme='dark'] .dashboard-card,
+        html[data-theme='dark'] .metric-card,
+        html[data-theme='dark'] .status-card,
+        html[data-theme='dark'] .alert {
+            background: #0F172A;
+            border-color: rgba(148, 163, 184, 0.15);
+            box-shadow: none;
+            color: var(--dark);
+        }
+
+        html[data-theme='dark'] .nav-tabs .nav-link.active {
+            background: var(--primary-dark);
+        }
+
+        html[data-theme='dark'] .dashboard-item {
+            background: #0B1220;
+            border-color: rgba(148, 163, 184, 0.15);
+        }
+
+        /* Clean mode (densidade minimalista) */
+        html[data-ui='clean'] .dashboard-card,
+        html[data-ui='clean'] .metric-card,
+        html[data-ui='clean'] .status-card,
+        html[data-ui='clean'] .alert {
+            box-shadow: none;
+            border: 1px solid rgba(226, 232, 240, 0.6);
+        }
+
+        html[data-ui='clean'] .dashboard-card:hover,
+        html[data-ui='clean'] .metric-card:hover {
+            transform: none;
+            box-shadow: none;
+        }
+
+        html[data-ui='clean'] .header-section {
+            box-shadow: none;
+        }
     </style>
 </head>
 <body>
@@ -867,6 +923,12 @@ try {
                         <div class="subtitle">Bem-vindo de volta, <?= htmlspecialchars($_SESSION['user_name'] ?? 'Atendente') ?>! Aqui está o resumo do seu dia.</div>
                     </div>
                     <div class="d-flex gap-2 mt-3 mt-md-0">
+                        <button class="btn btn-outline-light btn-sm" id="themeToggle" title="Alternar tema (claro/escuro)">
+                            <i class="fas fa-moon"></i>
+                        </button>
+                        <button class="btn btn-outline-light btn-sm" id="cleanToggle" title="Alternar modo clean">
+                            <i class="fas fa-border-all"></i>
+                        </button>
                         <button class="btn btn-outline-light btn-sm" title="Atualizar Dados" onclick="location.reload()">
                             <i class="fas fa-sync-alt"></i>
                         </button>
@@ -1393,6 +1455,65 @@ try {
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     
     <script>
+        // Helpers de tema
+        function getColorVar(name) {
+            return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+        }
+
+        function applyThemeFromPreference() {
+            const saved = localStorage.getItem('ultra-theme') || 'auto';
+            const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+            const theme = saved === 'auto' ? (prefersDark ? 'dark' : 'light') : saved;
+            document.documentElement.setAttribute('data-theme', theme);
+            const themeIcon = document.querySelector('#themeToggle i');
+            if (themeIcon) {
+                themeIcon.classList.toggle('fa-sun', theme === 'dark');
+                themeIcon.classList.toggle('fa-moon', theme !== 'dark');
+            }
+        }
+
+        function toggleTheme() {
+            const current = document.documentElement.getAttribute('data-theme') || 'light';
+            const next = current === 'dark' ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', next);
+            localStorage.setItem('ultra-theme', next);
+            const themeIcon = document.querySelector('#themeToggle i');
+            if (themeIcon) {
+                themeIcon.classList.toggle('fa-sun', next === 'dark');
+                themeIcon.classList.toggle('fa-moon', next !== 'dark');
+            }
+            applyThemeToCharts();
+        }
+
+        function toggleCleanMode() {
+            const current = document.documentElement.getAttribute('data-ui') || 'default';
+            const next = current === 'clean' ? 'default' : 'clean';
+            document.documentElement.setAttribute('data-ui', next);
+            localStorage.setItem('ultra-ui', next);
+        }
+
+        // Atualiza cores dos gráficos conforme o tema
+        function applyThemeToCharts() {
+            const grid = getColorVar('--chart-grid') || 'rgba(100, 116, 139, 0.2)';
+            const text = getColorVar('--chart-text') || '#475569';
+            if (window.financeiroChart) {
+                window.financeiroChart.options.scales.x.grid.color = grid;
+                window.financeiroChart.options.scales.y.grid.color = grid;
+                window.financeiroChart.options.scales.x.ticks.color = text;
+                window.financeiroChart.options.scales.y.ticks.color = text;
+                if (window.financeiroChart.options.plugins && window.financeiroChart.options.plugins.legend) {
+                    window.financeiroChart.options.plugins.legend.labels.color = text;
+                }
+                window.financeiroChart.update();
+            }
+            if (window.statusChart) {
+                if (window.statusChart.options.plugins && window.statusChart.options.plugins.legend) {
+                    window.statusChart.options.plugins.legend.labels.color = text;
+                }
+                window.statusChart.update();
+            }
+        }
+
         // Dados para os gráficos
         const statusData = {
             labels: ['Abertos', 'Agendados', 'Em Andamento', 'Concluídos', 'Atrasados', 'Cancelados'],
@@ -1412,6 +1533,7 @@ try {
         
         function initStatusChart() {
             const ctx = document.getElementById('statusPieChart').getContext('2d');
+            const labelColor = getColorVar('--chart-text') || '#475569';
             statusChart = new Chart(ctx, {
                 type: 'doughnut',
                 data: {
@@ -1431,7 +1553,8 @@ try {
                             position: 'bottom',
                             labels: {
                                 padding: 20,
-                                usePointStyle: true
+                                usePointStyle: true,
+                                color: labelColor
                             }
                         }
                     }
@@ -1450,6 +1573,7 @@ try {
                 if (!statusChart) {
                     initStatusChart();
                 }
+                applyThemeToCharts();
             } else {
                 cardsDiv.style.display = 'flex';
                 chartDiv.style.display = 'none';
@@ -1459,7 +1583,9 @@ try {
         // Gráfico Financeiro
         function initFinanceiroChart() {
             const ctx = document.getElementById('financeiroChart').getContext('2d');
-            new Chart(ctx, {
+            const grid = getColorVar('--chart-grid') || 'rgba(100, 116, 139, 0.2)';
+            const text = getColorVar('--chart-text') || '#475569';
+            window.financeiroChart = new Chart(ctx, {
                 type: 'line',
                 data: {
                     labels: ['Sem 1', 'Sem 2', 'Sem 3', 'Sem 4'],
@@ -1484,13 +1610,20 @@ try {
                     maintainAspectRatio: false,
                     plugins: {
                         legend: {
-                            position: 'top'
+                            position: 'top',
+                            labels: { color: text }
                         }
                     },
                     scales: {
+                        x: {
+                            grid: { color: grid },
+                            ticks: { color: text }
+                        },
                         y: {
                             beginAtZero: true,
+                            grid: { color: grid },
                             ticks: {
+                                color: text,
                                 callback: function(value) {
                                     return 'R$ ' + value.toLocaleString('pt-BR');
                                 }
@@ -1503,10 +1636,16 @@ try {
 
         // Inicializar quando o DOM estiver pronto
         document.addEventListener('DOMContentLoaded', function() {
+            // Aplicar preferências salvas
+            applyThemeFromPreference();
+            const savedUi = localStorage.getItem('ultra-ui') || 'default';
+            document.documentElement.setAttribute('data-ui', savedUi);
+
             // Inicializar gráfico financeiro
             initFinanceiroChart();
+            applyThemeToCharts();
             
-            // Adicionar animações aos elementos
+            // Animações
             const cards = document.querySelectorAll('.metric-card, .dashboard-card');
             cards.forEach((card, index) => {
                 card.style.animationDelay = `${index * 0.1}s`;
@@ -1521,7 +1660,23 @@ try {
                         location.reload();
                     }, 1000);
                 }
-            }, 300000); // 5 minutos
+            }, 300000);
+
+            // Listeners dos toggles
+            const themeBtn = document.getElementById('themeToggle');
+            const cleanBtn = document.getElementById('cleanToggle');
+            if (themeBtn) themeBtn.addEventListener('click', toggleTheme);
+            if (cleanBtn) cleanBtn.addEventListener('click', toggleCleanMode);
+
+            // Reagir a mudança de preferência do SO
+            if (window.matchMedia) {
+                window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+                    if ((localStorage.getItem('ultra-theme') || 'auto') === 'auto') {
+                        applyThemeFromPreference();
+                        applyThemeToCharts();
+                    }
+                });
+            }
         });
 
         // Notificações em tempo real (simulação)
