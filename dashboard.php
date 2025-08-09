@@ -1,1553 +1,1240 @@
 <?php
-declare(strict_types=1);
-session_start();
+// Incluir arquivo de configuração
+require_once 'config.php';
+require_once 'functions.php';
 
-require_once __DIR__ . '/config.php';
+// Verificar se o usuário está logado (adicionar depois que criar o sistema de login)
+// verificarAutenticacao();
 
-// Verificação de segurança
-if (!isset($_SESSION['user_id'])) {
-    header("Location: /login.php");
-    exit();
-}
+// Instanciar classe de dados do dashboard
+$dashboard = new DashboardData($pdo);
 
-// Controle de inatividade (30 minutos)
-$_SESSION['user_last_active'] = $_SESSION['user_last_active'] ?? time();
-if ((time() - $_SESSION['user_last_active']) > 1800) {
-    session_unset();
-    session_destroy();
-    header("Location: /login.php?expired=1");
-    exit();
-}
-$_SESSION['user_last_active'] = time();
+// Buscar todos os dados necessários
+$receitaMensal = $dashboard->getReceitaMensal();
+$receitaMesAnterior = $dashboard->getReceitaMesAnterior();
+$percentualCrescimento = calcularPercentualCrescimento($receitaMensal, $receitaMesAnterior);
 
-function getMetric(PDO $pdo, string $query, array $params = []): float {
-    $stmt = $pdo->prepare($query);
-    $stmt->execute($params);
-    $value = $stmt->fetchColumn();
-    return is_numeric($value) ? floatval($value) : 0.0;
-}
+$agendamentos = $dashboard->getAgendamentosDia();
+$funcionarios = $dashboard->getFuncionarios();
+$lavanderia = $dashboard->getLavanderia();
 
-$error = '';
-$success = '';
-$atendente_id = $_SESSION['user_id'];
+$proximosServicos = $dashboard->getProximosServicos();
+$entregasTapetes = $dashboard->getProximasEntregas();
 
-// Processar adição de lembrete
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['adicionar_lembrete'])) {
-    $texto = trim($_POST['texto_lembrete'] ?? '');
-    if (empty($texto)) {
-        $error = "O lembrete não pode estar vazio.";
-    } else {
-        $stmt = $pdo->prepare("INSERT INTO lembretes (usuario_id, texto) VALUES (?, ?)");
-        $stmt->execute([$atendente_id, $texto]);
-        $success = "Lembrete adicionado com sucesso!";
-        header("Location: " . $_SERVER['PHP_SELF']);
-        exit();
-    }
-}
-
-// Processar conclusão de lembrete
-if (isset($_GET['concluir_lembrete'])) {
-    $lembrete_id = (int)$_GET['concluir_lembrete'];
-    $stmt = $pdo->prepare("UPDATE lembretes SET concluido = 1 WHERE id = ? AND usuario_id = ?");
-    $stmt->execute([$lembrete_id, $atendente_id]);
-    header("Location: " . $_SERVER['PHP_SELF']);
-    exit();
-}
-
-// Processar exclusão de lembrete
-if (isset($_GET['excluir_lembrete'])) {
-    $lembrete_id = (int)$_GET['excluir_lembrete'];
-    $stmt = $pdo->prepare("DELETE FROM lembretes WHERE id = ? AND usuario_id = ?");
-    $stmt->execute([$lembrete_id, $atendente_id]);
-    header("Location: " . $_SERVER['PHP_SELF']);
-    exit();
-}
-
-try {
-    // Processar resposta ao ticket
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['responder_ticket'])) {
-        $ticket_id = (int)$_POST['ticket_id'];
-        $resposta = trim($_POST['resposta'] ?? '');
-
-        if (empty($resposta)) {
-            $error = "A resposta não pode estar vazia.";
-        } else {
-            $stmt = $pdo->prepare("
-                UPDATE tickets 
-                SET data_resposta = NOW(), resposta = ?, status = 'resolvido'
-                WHERE id = ?
-            ");
-            $stmt->execute([$resposta, $ticket_id]);
-            $success = "Ticket respondido com sucesso!";
-            header("Location: " . $_SERVER['PHP_SELF']);
-            exit();
-        }
-    }
-
-    // Processar criação de ticket
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['criar_ticket'])) {
-        $titulo = trim($_POST['titulo'] ?? '');
-        $descricao = trim($_POST['descricao'] ?? '');
-        $prioridade = $_POST['prioridade'] ?? 'baixa';
-        $categoria = $_POST['categoria'] ?? '';
-        $tecnico_id = (int)$_POST['tecnico_id'];
-
-        if (empty($titulo) || empty($descricao) || empty($categoria) || $tecnico_id <= 0) {
-            $error = "Preencha todos os campos obrigatórios.";
-        } elseif (!in_array($prioridade, ['baixa', 'media', 'alta'])) {
-            $error = "Prioridade inválida.";
-        } elseif (!in_array($categoria, ['falta', 'reembolso', 'problema_servico', 'manutencao_equipamento', 'atraso', 'outro'])) {
-            $error = "Categoria inválida.";
-        } else {
-            $stmt = $pdo->prepare("
-                INSERT INTO tickets_atendente_tecnico (atendente_id, tecnico_id, titulo, descricao, prioridade, status, created_at, categoria)
-                VALUES (?, ?, ?, ?, ?, 'aberto', NOW(), ?)
-            ");
-            $stmt->execute([$atendente_id, $tecnico_id, $titulo, $descricao, $prioridade, $categoria]);
-            $success = "Ticket enviado ao técnico com sucesso!";
-            header("Location: " . $_SERVER['PHP_SELF']);
-            exit();
-        }
-    }
-
-    // Métricas principais
-    $orcamentos_dia = getMetric($pdo, "SELECT COUNT(*) FROM orcamentos WHERE DATE(validade) = CURDATE()");
-    $valores_recebidos = getMetric($pdo, "SELECT COALESCE(SUM(total), 0) FROM ordens_servico WHERE status = 'Concluída'");
-    $valores_a_receber = getMetric($pdo, "SELECT COALESCE(SUM(total), 0) FROM ordens_servico WHERE status = 'Agendado'");
-    
-    // Dados de status de orçamentos
-    $status_orcamentos = [];
-    $stmt_abertos = $pdo->query("SELECT COUNT(*) AS abertos FROM orcamentos WHERE status = 'Aberto'");
-    $status_orcamentos['abertos'] = (int) $stmt_abertos->fetchColumn();
-
-    $stmt_ordens = $pdo->query("
-        SELECT 
-            SUM(status = 'Agendado') AS agendados,
-            SUM(status = 'Em Andamento') AS em_andamento,
-            SUM(status = 'Concluída') AS concluidos,
-            SUM(status = 'Atrasado') AS atrasados,
-            SUM(status = 'Cancelada') AS cancelados
-        FROM ordens_servico
-    ");
-    $ordens_result = $stmt_ordens->fetch(PDO::FETCH_ASSOC);
-    $status_orcamentos['agendados'] = (int) ($ordens_result['agendados'] ?? 0);
-    $status_orcamentos['em_andamento'] = (int) ($ordens_result['em_andamento'] ?? 0);
-    $status_orcamentos['concluidos'] = (int) ($ordens_result['concluidos'] ?? 0);
-    $status_orcamentos['atrasados'] = (int) ($ordens_result['atrasados'] ?? 0);
-    $status_orcamentos['cancelados'] = (int) ($ordens_result['cancelados'] ?? 0);
-
-    // Contas a Pagar e Receber do mês atual
-    $contas = $pdo->query("
-        SELECT 
-            id,
-            tipo,
-            descricao,
-            valor,
-            data_vencimento,
-            data_pagamento,
-            status,
-            CASE 
-                WHEN status = 'pendente' AND data_vencimento < CURDATE() THEN 'atrasado'
-                ELSE status
-            END AS status_atualizado
-        FROM contas
-        WHERE DATE_FORMAT(data_vencimento, '%Y-%m') = DATE_FORMAT(CURDATE(), '%Y-%m')
-        ORDER BY data_vencimento DESC
-    ")->fetchAll(PDO::FETCH_ASSOC);
-
-    // Tickets
-    $tickets_atendente = $pdo->query("
-        SELECT tat.*, u.nome AS tecnico_nome 
-        FROM tickets_atendente_tecnico tat 
-        LEFT JOIN usuarios u ON tat.tecnico_id = u.id 
-        WHERE tat.atendente_id = $atendente_id
-        ORDER BY FIELD(tat.prioridade, 'alta', 'media', 'baixa'), tat.created_at DESC
-        LIMIT 5
-    ")->fetchAll(PDO::FETCH_ASSOC);
-    $tickets_tecnico = $pdo->query("
-        SELECT t.*, u.nome AS tecnico_nome 
-        FROM tickets t 
-        LEFT JOIN usuarios u ON t.atribuido_a = u.id 
-        WHERE t.status = 'aberto'
-        ORDER BY FIELD(t.prioridade, 'alta', 'media', 'baixa'), t.created_at DESC
-        LIMIT 5
-    ")->fetchAll(PDO::FETCH_ASSOC);
-
-    // Lavanderia
-    $lavanderia = $pdo->query("
-        SELECT l.*, COALESCE(c.nome, 'Cliente não encontrado') AS cliente 
-        FROM lavanderia l 
-        LEFT JOIN clientes c ON l.cliente_id = c.id 
-        ORDER BY l.data_prevista_entrega ASC 
-        LIMIT 5
-    ")->fetchAll(PDO::FETCH_ASSOC);
-
-    // Processar o campo 'itens' (JSON) para cada registro da lavanderia
-    foreach ($lavanderia as &$item) {
-        $item['itens'] = json_decode($item['itens'], true) ?? [];
-    }
-    unset($item);
-
-    $tecnicos = $pdo->query("SELECT id, nome FROM usuarios WHERE cargo = 'tecnico' ORDER BY nome ASC")->fetchAll(PDO::FETCH_ASSOC);
-
-    // Próximos 5 serviços agendados
-    $proximos_servicos = $pdo->query("
-        SELECT 
-            os.id, 
-            os.numero_ordem, 
-            os.data_servico, 
-            os.hora_servico, 
-            os.status, 
-            c.nome AS cliente_nome,
-            u.nome AS tecnico_nome
-        FROM ordens_servico os
-        LEFT JOIN clientes c ON os.cliente_id = c.id
-        LEFT JOIN usuarios u ON os.tecnico_id = u.id
-        WHERE os.status = 'Agendado' AND os.data_servico >= CURDATE()
-        ORDER BY os.data_servico ASC, os.hora_servico ASC
-        LIMIT 5
-    ")->fetchAll(PDO::FETCH_ASSOC);
-
-    // Lembretes
-    $lembretes = $pdo->query("
-        SELECT id, texto, data_criacao, concluido
-        FROM lembretes
-        WHERE usuario_id = $atendente_id AND concluido = 0
-        ORDER BY data_criacao DESC
-        LIMIT 5
-    ")->fetchAll(PDO::FETCH_ASSOC);
-
-} catch (PDOException $e) {
-    die("Erro ao buscar dados: " . $e->getMessage());
-}
+$distribuicao = $dashboard->getDistribuicaoServicos();
+$performance = $dashboard->getPerformance();
 ?>
-
 <!DOCTYPE html>
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard Ultra Multiservice</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <title>Ultra Limp - Dashboard Executivo</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/animate.css@4.1.1/animate.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
-            --primary: #2563EB;
-            --primary-dark: #1D4ED8;
-            --secondary: #10B981;
-            --secondary-dark: #059669;
-            --accent: #F59E0B;
-            --accent-dark: #D97706;
-            --success: #22C55E;
-            --warning: #EAB308;
-            --danger: #EF4444;
-            --info: #3B82F6;
-            --light: #F8FAFC;
-            --light-gray: #F1F5F9;
-            --gray: #64748B;
-            --dark: #0F172A;
-            --white: #FFFFFF;
-            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-            --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-            --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
-            --gradient-primary: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
-            --gradient-secondary: linear-gradient(135deg, var(--secondary) 0%, var(--secondary-dark) 100%);
-            --gradient-accent: linear-gradient(135deg, var(--accent) 0%, var(--accent-dark) 100%);
-            --border-radius: 12px;
-            --border-radius-lg: 16px;
-            --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            /* Paleta de cores profissional e clean */
+            --primary: #2563eb;
+            --primary-light: #3b82f6;
+            --primary-dark: #1d4ed8;
+            --secondary: #64748b;
+            --accent: #0ea5e9;
+            
+            /* Tons de cinza refinados */
+            --gray-50: #f8fafc;
+            --gray-100: #f1f5f9;
+            --gray-200: #e2e8f0;
+            --gray-300: #cbd5e1;
+            --gray-400: #94a3b8;
+            --gray-500: #64748b;
+            --gray-600: #475569;
+            --gray-700: #334155;
+            --gray-800: #1e293b;
+            --gray-900: #0f172a;
+            
+            /* Cores de status refinadas */
+            --success: #059669;
+            --warning: #d97706;
+            --danger: #dc2626;
+            --info: #0284c7;
+            
+            /* Backgrounds */
+            --bg-primary: #ffffff;
+            --bg-secondary: #f8fafc;
+            --bg-card: #ffffff;
+            
+            /* Sombras profissionais */
+            --shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+            
+            /* Bordas e raios */
+            --radius-sm: 0.375rem;
+            --radius-md: 0.5rem;
+            --radius-lg: 0.75rem;
+            --radius-xl: 1rem;
+            
+            /* Espaçamentos consistentes */
+            --space-xs: 0.25rem;
+            --space-sm: 0.5rem;
+            --space-md: 1rem;
+            --space-lg: 1.5rem;
+            --space-xl: 2rem;
+            --space-2xl: 3rem;
+            
+            /* Transições suaves */
+            --transition-fast: 0.15s ease-in-out;
+            --transition-normal: 0.25s ease-in-out;
+            --transition-slow: 0.35s ease-in-out;
         }
 
         * {
+            margin: 0;
+            padding: 0;
             box-sizing: border-box;
         }
 
         body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, var(--light) 0%, #E2E8F0 100%);
-            color: var(--dark);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-secondary);
+            color: var(--gray-800);
             line-height: 1.6;
-            padding-top: 80px;
-            overflow-x: hidden;
+            font-size: 14px;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
         }
 
-        /* Header Moderno */
-        .header-section {
-            background: var(--gradient-primary);
-            color: white;
-            padding: 2rem;
-            border-radius: var(--border-radius-lg);
-            margin-bottom: 2rem;
-            box-shadow: var(--shadow-xl);
-            position: relative;
-            overflow: hidden;
+        /* Layout Principal */
+        .main-content {
+            min-height: 100vh;
+            padding: var(--space-xl);
+            max-width: 1440px;
+            margin: 0 auto;
         }
 
-        .header-section::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="grain" width="100" height="100" patternUnits="userSpaceOnUse"><circle cx="50" cy="50" r="1" fill="rgba(255,255,255,0.1)"/></pattern></defs><rect width="100" height="100" fill="url(%23grain)"/></svg>');
-            opacity: 0.3;
+        /* Header Executivo */
+        .executive-header {
+            background: var(--bg-card);
+            border-radius: var(--radius-xl);
+            padding: var(--space-2xl);
+            margin-bottom: var(--space-2xl);
+            box-shadow: var(--shadow-sm);
+            border: 1px solid var(--gray-100);
         }
 
-        .header-section .content {
-            position: relative;
-            z-index: 1;
+        .header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: var(--space-xl);
         }
 
-        .header-section h2 {
-            font-weight: 700;
-            font-size: 2rem;
-            margin: 0;
-            text-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        .brand-section {
+            display: flex;
+            align-items: center;
+            gap: var(--space-lg);
         }
 
-        .header-section .subtitle {
-            opacity: 0.9;
-            font-size: 1.1rem;
-            margin-top: 0.5rem;
-        }
-
-        /* Cards Modernos */
-        .dashboard-card {
-            background: var(--white);
-            border-radius: var(--border-radius-lg);
-            box-shadow: var(--shadow);
-            padding: 2rem;
-            transition: var(--transition);
-            margin-bottom: 2rem;
-            border: 1px solid rgba(226, 232, 240, 0.8);
-            position: relative;
-            overflow: hidden;
-        }
-
-        .dashboard-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 4px;
-            background: var(--gradient-primary);
-            opacity: 0;
-            transition: var(--transition);
-        }
-
-        .dashboard-card:hover {
-            transform: translateY(-8px);
-            box-shadow: var(--shadow-xl);
-        }
-
-        .dashboard-card:hover::before {
-            opacity: 1;
-        }
-
-        /* Métricas Avançadas */
-        .metric-card {
-            background: var(--white);
-            border-radius: var(--border-radius);
-            padding: 1.5rem;
-            text-align: center;
-            transition: var(--transition);
-            border: 1px solid rgba(226, 232, 240, 0.8);
-            position: relative;
-            overflow: hidden;
-            height: 100%;
-        }
-
-        .metric-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: linear-gradient(135deg, rgba(37, 99, 235, 0.05) 0%, rgba(16, 185, 129, 0.05) 100%);
-            opacity: 0;
-            transition: var(--transition);
-        }
-
-        .metric-card:hover::before {
-            opacity: 1;
-        }
-
-        .metric-card:hover {
-            transform: translateY(-4px) scale(1.02);
-            box-shadow: var(--shadow-lg);
-        }
-
-        .metric-icon {
-            width: 70px;
-            height: 70px;
-            border-radius: 50%;
+        .brand-logo {
+            width: 64px;
+            height: 64px;
+            background: linear-gradient(135deg, var(--primary), var(--primary-light));
+            border-radius: var(--radius-lg);
             display: flex;
             align-items: center;
             justify-content: center;
-            margin: 0 auto 1rem;
-            font-size: 1.8rem;
             color: white;
-            position: relative;
-            z-index: 1;
-            box-shadow: var(--shadow);
-        }
-
-        .metric-value {
-            font-size: 2rem;
-            font-weight: 800;
-            color: var(--dark);
-            margin-bottom: 0.5rem;
-            position: relative;
-            z-index: 1;
-        }
-
-        .metric-label {
-            font-size: 0.95rem;
-            color: var(--gray);
-            font-weight: 500;
-            position: relative;
-            z-index: 1;
-        }
-
-        .metric-trend {
-            font-size: 0.85rem;
-            margin-top: 0.5rem;
-            font-weight: 600;
-            position: relative;
-            z-index: 1;
-        }
-
-        /* Status Cards Melhorados */
-        .status-card {
-            background: var(--white);
-            border-radius: var(--border-radius);
-            padding: 1.25rem;
-            text-align: center;
-            box-shadow: var(--shadow-sm);
-            transition: var(--transition);
-            border: 1px solid rgba(226, 232, 240, 0.8);
-            height: 100%;
-        }
-
-        .status-card:hover {
-            transform: translateY(-2px);
-            box-shadow: var(--shadow);
-        }
-
-        .status-value {
-            font-size: 1.5rem;
+            font-size: 24px;
             font-weight: 700;
-            margin-bottom: 0.25rem;
+            box-shadow: var(--shadow-md);
         }
 
-        .status-label {
-            font-size: 0.85rem;
-            color: var(--gray);
+        .brand-info h1 {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--gray-900);
+            margin-bottom: var(--space-xs);
+        }
+
+        .brand-subtitle {
+            color: var(--gray-500);
+            font-size: 15px;
             font-weight: 500;
         }
 
-        /* Dashboard Items Modernos */
-        .dashboard-item {
+        .header-stats {
             display: flex;
+            gap: var(--space-2xl);
             align-items: center;
-            justify-content: space-between;
-            padding: 1rem;
-            border-radius: var(--border-radius);
-            margin-bottom: 0.75rem;
-            background: var(--light-gray);
-            transition: var(--transition);
-            cursor: pointer;
-            border: 1px solid transparent;
         }
 
-        .dashboard-item:hover {
-            background: var(--white);
-            box-shadow: var(--shadow);
-            border-color: rgba(37, 99, 235, 0.2);
-            transform: translateX(4px);
-        }
-
-        .dashboard-item i {
-            margin-right: 1rem;
-            font-size: 1.25rem;
-            width: 24px;
+        .stat-item {
             text-align: center;
+            padding: var(--space-md) 0;
         }
 
-        .dashboard-item .info {
-            flex-grow: 1;
-            display: flex;
-            flex-direction: column;
-            gap: 0.25rem;
-            overflow: hidden;
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--gray-900);
+            margin-bottom: var(--space-xs);
         }
 
-        .dashboard-item .info span {
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            font-size: 0.9rem;
-        }
-
-        .dashboard-item .info .fw-semibold {
+        .stat-label {
+            font-size: 12px;
+            color: var(--gray-500);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
             font-weight: 600;
-            color: var(--dark);
         }
 
-        .dashboard-item .actions {
-            margin-left: 1rem;
-            flex-shrink: 0;
-            display: flex;
-            gap: 0.5rem;
+        /* KPI Cards - Design Minimalista */
+        .kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: var(--space-lg);
+            margin-bottom: var(--space-2xl);
         }
 
-        /* Botões Modernos */
-        .btn {
-            border-radius: var(--border-radius);
-            font-weight: 600;
-            transition: var(--transition);
-            border: none;
+        .kpi-card {
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            padding: var(--space-xl);
+            box-shadow: var(--shadow-sm);
+            border: 1px solid var(--gray-100);
             position: relative;
             overflow: hidden;
+            transition: all var(--transition-normal);
         }
 
-        .btn::before {
+        .kpi-card:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+            border-color: var(--gray-200);
+        }
+
+        .kpi-card::before {
             content: '';
             position: absolute;
             top: 0;
-            left: -100%;
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
-            transition: left 0.5s;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--primary), var(--primary-light));
         }
 
-        .btn:hover::before {
-            left: 100%;
+        .kpi-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: var(--space-lg);
         }
 
-        .btn-primary {
-            background: var(--gradient-primary);
-            color: white;
-            box-shadow: var(--shadow);
+        .kpi-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            background: var(--gray-50);
+            color: var(--primary);
         }
 
-        .btn-primary:hover {
-            background: var(--primary-dark);
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-lg);
-            color: white;
-        }
-
-        .btn-secondary {
-            background: var(--gradient-secondary);
-            color: white;
-            box-shadow: var(--shadow);
-        }
-
-        .btn-secondary:hover {
-            background: var(--secondary-dark);
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-lg);
-            color: white;
-        }
-
-        .btn-outline-light {
-            border: 2px solid rgba(255,255,255,0.3);
-            color: white;
-            background: transparent;
-        }
-
-        .btn-outline-light:hover {
-            background: rgba(255,255,255,0.1);
-            border-color: white;
-            color: white;
-            transform: translateY(-2px);
-        }
-
-        /* Badges Modernos */
-        .badge {
+        .kpi-trend {
+            display: flex;
+            align-items: center;
+            gap: var(--space-xs);
+            font-size: 13px;
             font-weight: 600;
-            padding: 0.5rem 0.75rem;
-            border-radius: 6px;
-            font-size: 0.75rem;
+            padding: var(--space-xs) var(--space-sm);
+            border-radius: var(--radius-sm);
+            background: var(--gray-50);
+            color: var(--gray-600);
         }
 
-        /* Alertas Modernos */
-        .alert {
-            border-radius: var(--border-radius);
-            border: none;
-            box-shadow: var(--shadow);
+        .kpi-trend.positive {
+            background: rgba(5, 150, 105, 0.1);
+            color: var(--success);
+        }
+
+        .kpi-trend.negative {
+            background: rgba(220, 38, 38, 0.1);
+            color: var(--danger);
+        }
+
+        .kpi-value {
+            font-size: 32px;
+            font-weight: 700;
+            color: var(--gray-900);
+            margin-bottom: var(--space-xs);
+            line-height: 1.2;
+        }
+
+        .kpi-label {
+            font-size: 14px;
+            color: var(--gray-600);
             font-weight: 500;
+            margin-bottom: var(--space-sm);
         }
 
-        /* Navegação por Tabs */
-        .nav-tabs {
-            border: none;
-            margin-bottom: 1.5rem;
+        .kpi-subtitle {
+            font-size: 12px;
+            color: var(--gray-400);
+            margin-bottom: var(--space-md);
         }
 
-        .nav-tabs .nav-link {
-            color: var(--gray);
+        .kpi-progress {
+            height: 4px;
+            background: var(--gray-100);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .kpi-progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary), var(--primary-light));
+            border-radius: 2px;
+            transition: width 1s ease-out;
+        }
+
+        /* Seções de Conteúdo */
+        .content-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: var(--space-xl);
+            margin-bottom: var(--space-2xl);
+        }
+
+        .content-card {
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-sm);
+            border: 1px solid var(--gray-100);
+            overflow: hidden;
+        }
+
+        .card-header {
+            padding: var(--space-xl) var(--space-xl) var(--space-lg);
+            border-bottom: 1px solid var(--gray-100);
+            background: var(--gray-50);
+        }
+
+        .card-title {
+            display: flex;
+            align-items: center;
+            gap: var(--space-sm);
+            font-size: 16px;
             font-weight: 600;
-            border-radius: var(--border-radius) var(--border-radius) 0 0;
-            border: none;
-            padding: 1rem 1.5rem;
-            transition: var(--transition);
+            color: var(--gray-900);
         }
 
-        .nav-tabs .nav-link.active {
-            background: var(--gradient-primary);
+        .card-title i {
+            color: var(--primary);
+        }
+
+        .card-content {
+            padding: var(--space-xl);
+        }
+
+        /* Timeline de Serviços */
+        .services-timeline {
+            position: relative;
+        }
+
+        .timeline-item {
+            display: flex;
+            gap: var(--space-lg);
+            padding: var(--space-lg) 0;
+            border-bottom: 1px solid var(--gray-100);
+            position: relative;
+        }
+
+        .timeline-item:last-child {
+            border-bottom: none;
+        }
+
+        .timeline-time {
+            min-width: 80px;
+            text-align: center;
+            position: relative;
+        }
+
+        .timeline-time::after {
+            content: '';
+            position: absolute;
+            right: -8px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 8px;
+            height: 8px;
+            background: var(--primary);
+            border-radius: 50%;
+            border: 2px solid white;
+            box-shadow: 0 0 0 2px var(--primary);
+        }
+
+        .time-hour {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--gray-900);
+        }
+
+        .time-date {
+            font-size: 11px;
+            color: var(--gray-400);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .timeline-content {
+            flex: 1;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .service-info h4 {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--gray-900);
+            margin-bottom: var(--space-xs);
+        }
+
+        .service-details {
+            font-size: 12px;
+            color: var(--gray-500);
+            display: flex;
+            align-items: center;
+            gap: var(--space-xs);
+        }
+
+        .status-badge {
+            padding: var(--space-xs) var(--space-sm);
+            border-radius: var(--radius-sm);
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .status-badge.agendado {
+            background: rgba(37, 99, 235, 0.1);
+            color: var(--primary);
+        }
+
+        .status-badge.em-andamento {
+            background: rgba(217, 119, 6, 0.1);
+            color: var(--warning);
+        }
+
+        .status-badge.concluido {
+            background: rgba(5, 150, 105, 0.1);
+            color: var(--success);
+        }
+
+        /* Lista de Entregas */
+        .deliveries-list {
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-md);
+        }
+
+        .delivery-item {
+            display: flex;
+            align-items: center;
+            gap: var(--space-md);
+            padding: var(--space-md);
+            border-radius: var(--radius-md);
+            background: var(--gray-50);
+            transition: all var(--transition-fast);
+        }
+
+        .delivery-item:hover {
+            background: var(--gray-100);
+        }
+
+        .delivery-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: var(--radius-md);
+            background: linear-gradient(135deg, var(--danger), #ef4444);
             color: white;
-            box-shadow: var(--shadow);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
         }
 
-        .nav-tabs .nav-link:hover:not(.active) {
-            background: var(--light-gray);
-            color: var(--dark);
+        .delivery-info {
+            flex: 1;
         }
 
-        /* Gráficos Container */
+        .delivery-client {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--gray-900);
+            margin-bottom: var(--space-xs);
+        }
+
+        .delivery-date {
+            font-size: 12px;
+            color: var(--gray-500);
+            display: flex;
+            align-items: center;
+            gap: var(--space-xs);
+        }
+
+        .delivery-value {
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--success);
+        }
+
+        /* Gráficos */
         .chart-container {
             position: relative;
             height: 300px;
-            margin: 1rem 0;
+            margin: var(--space-lg) 0;
         }
 
-        /* AI Assistant Floating */
-        .ai-assistant {
-            position: fixed;
-            bottom: 2rem;
-            right: 2rem;
-            z-index: 1000;
+        .chart-stats {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: var(--space-md);
+            margin-top: var(--space-lg);
         }
 
-        .ai-assistant-btn {
-            width: 60px;
-            height: 60px;
+        .stat-legend {
+            display: flex;
+            align-items: center;
+            gap: var(--space-sm);
+            padding: var(--space-sm);
+            border-radius: var(--radius-sm);
+            background: var(--gray-50);
+        }
+
+        .legend-dot {
+            width: 12px;
+            height: 12px;
             border-radius: 50%;
-            background: var(--gradient-accent);
+        }
+
+        .legend-text {
+            font-size: 12px;
+            color: var(--gray-600);
+            font-weight: 500;
+        }
+
+        /* Performance Section */
+        .performance-metrics {
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-lg);
+        }
+
+        .metric-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: var(--space-lg);
+            background: var(--gray-50);
+            border-radius: var(--radius-md);
+        }
+
+        .metric-info h4 {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--gray-900);
+            margin-bottom: var(--space-xs);
+        }
+
+        .metric-description {
+            font-size: 12px;
+            color: var(--gray-500);
+        }
+
+        .metric-value-large {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        /* Alertas Elegantes */
+        .alerts-section {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: var(--space-lg);
+            margin-top: var(--space-2xl);
+        }
+
+        .alert-card {
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            padding: var(--space-xl);
+            box-shadow: var(--shadow-sm);
+            border-left: 4px solid;
+            position: relative;
+            transition: all var(--transition-normal);
+        }
+
+        .alert-card:hover {
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .alert-card.warning {
+            border-left-color: var(--warning);
+            background: linear-gradient(135deg, rgba(217, 119, 6, 0.02), rgba(217, 119, 6, 0.05));
+        }
+
+        .alert-card.success {
+            border-left-color: var(--success);
+            background: linear-gradient(135deg, rgba(5, 150, 105, 0.02), rgba(5, 150, 105, 0.05));
+        }
+
+        .alert-header {
+            display: flex;
+            align-items: center;
+            gap: var(--space-md);
+            margin-bottom: var(--space-md);
+        }
+
+        .alert-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+        }
+
+        .alert-card.warning .alert-icon {
+            background: rgba(217, 119, 6, 0.1);
+            color: var(--warning);
+        }
+
+        .alert-card.success .alert-icon {
+            background: rgba(5, 150, 105, 0.1);
+            color: var(--success);
+        }
+
+        .alert-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--gray-900);
+        }
+
+        .alert-message {
+            font-size: 14px;
+            color: var(--gray-600);
+            line-height: 1.5;
+            margin-bottom: var(--space-lg);
+        }
+
+        .alert-actions {
+            display: flex;
+            gap: var(--space-sm);
+        }
+
+        .alert-btn {
+            padding: var(--space-sm) var(--space-md);
+            border: 1px solid var(--primary);
+            background: white;
+            color: var(--primary);
+            border-radius: var(--radius-sm);
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all var(--transition-fast);
+        }
+
+        .alert-btn:hover {
+            background: var(--primary);
             color: white;
-            border: none;
-            box-shadow: var(--shadow-lg);
-            font-size: 1.5rem;
-            transition: var(--transition);
-            animation: pulse 2s infinite;
         }
 
-        .ai-assistant-btn:hover {
-            transform: scale(1.1);
-            box-shadow: var(--shadow-xl);
+        .alert-btn.secondary {
+            border-color: var(--gray-300);
+            color: var(--gray-600);
         }
 
-        @keyframes pulse {
-            0% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.7); }
-            70% { box-shadow: 0 0 0 10px rgba(245, 158, 11, 0); }
-            100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+        .alert-btn.secondary:hover {
+            background: var(--gray-100);
+            color: var(--gray-700);
         }
 
-        /* Responsividade Avançada */
-        @media (max-width: 1200px) {
-            .dashboard-card {
-                padding: 1.5rem;
-            }
+        /* Estados Vazios */
+        .empty-state {
+            text-align: center;
+            padding: var(--space-2xl);
+            color: var(--gray-400);
         }
 
-        @media (max-width: 992px) {
-            .header-section {
-                padding: 1.5rem;
+        .empty-state i {
+            font-size: 48px;
+            margin-bottom: var(--space-lg);
+            color: var(--gray-300);
+        }
+
+        .empty-state p {
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        /* Responsividade */
+        @media (max-width: 1024px) {
+            .content-grid {
+                grid-template-columns: 1fr;
             }
             
-            .header-section h2 {
-                font-size: 1.75rem;
+            .header-content {
+                flex-direction: column;
+                gap: var(--space-lg);
             }
             
-            .metric-card {
-                padding: 1.25rem;
-            }
-            
-            .metric-icon {
-                width: 60px;
-                height: 60px;
-                font-size: 1.5rem;
-            }
-            
-            .metric-value {
-                font-size: 1.75rem;
+            .header-stats {
+                justify-content: space-around;
+                width: 100%;
             }
         }
 
         @media (max-width: 768px) {
-            body {
-                padding-top: 70px;
+            .main-content {
+                padding: var(--space-lg);
             }
             
-            .dashboard-card {
-                padding: 1.25rem;
-                margin-bottom: 1.5rem;
+            .kpi-grid {
+                grid-template-columns: 1fr;
             }
             
-            .metric-card {
-                padding: 1rem;
+            .executive-header {
+                padding: var(--space-lg);
             }
             
-            .metric-icon {
-                width: 50px;
-                height: 50px;
-                font-size: 1.25rem;
-                margin-bottom: 0.75rem;
-            }
-            
-            .metric-value {
-                font-size: 1.5rem;
-            }
-            
-            .dashboard-item {
-                padding: 0.75rem;
-                flex-wrap: wrap;
-            }
-            
-            .dashboard-item .info {
+            .brand-section {
                 flex-direction: column;
-                gap: 0.125rem;
+                text-align: center;
             }
             
-            .dashboard-item .info span {
-                font-size: 0.85rem;
-            }
-            
-            .ai-assistant {
-                bottom: 1rem;
-                right: 1rem;
-            }
-            
-            .ai-assistant-btn {
-                width: 50px;
-                height: 50px;
-                font-size: 1.25rem;
+            .alerts-section {
+                grid-template-columns: 1fr;
             }
         }
 
-        @media (max-width: 576px) {
-            .header-section {
-                padding: 1.25rem;
-            }
-            
-            .header-section h2 {
-                font-size: 1.5rem;
-            }
-            
-            .header-section .subtitle {
-                font-size: 1rem;
-            }
-            
-            .status-card {
-                padding: 1rem;
-            }
-            
-            .status-value {
-                font-size: 1.25rem;
-            }
-            
-            .status-label {
-                font-size: 0.8rem;
-            }
-            
-            .dashboard-item .actions {
-                margin-left: 0.5rem;
-                gap: 0.25rem;
-            }
-            
-            .btn-sm {
-                padding: 0.375rem 0.5rem;
-                font-size: 0.75rem;
-            }
-        }
-
-        /* Animações de Entrada */
-        .animate-fade-in {
-            animation: fadeIn 0.6s ease-out;
-        }
-
-        .animate-slide-up {
-            animation: slideUp 0.6s ease-out;
-        }
-
-        .animate-slide-in-right {
-            animation: slideInRight 0.6s ease-out;
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
-        }
-
-        @keyframes slideUp {
-            from { 
+        /* Animações Sutis */
+        @keyframes fadeInUp {
+            from {
                 opacity: 0;
-                transform: translateY(30px);
+                transform: translateY(20px);
             }
-            to { 
+            to {
                 opacity: 1;
                 transform: translateY(0);
             }
         }
 
-        @keyframes slideInRight {
-            from { 
-                opacity: 0;
-                transform: translateX(30px);
+        .kpi-card,
+        .content-card,
+        .alert-card {
+            animation: fadeInUp 0.6s ease-out;
+        }
+
+        .timeline-item {
+            animation: fadeInUp 0.4s ease-out;
+        }
+
+        .timeline-item:nth-child(1) { animation-delay: 0.1s; }
+        .timeline-item:nth-child(2) { animation-delay: 0.2s; }
+        .timeline-item:nth-child(3) { animation-delay: 0.3s; }
+        .timeline-item:nth-child(4) { animation-delay: 0.4s; }
+        .timeline-item:nth-child(5) { animation-delay: 0.5s; }
+
+        /* Hover Effects */
+        .timeline-item:hover {
+            background: rgba(37, 99, 235, 0.02);
+            margin: 0 calc(-1 * var(--space-lg));
+            padding: var(--space-lg);
+            border-radius: var(--radius-md);
+        }
+
+        /* Focus States */
+        .alert-btn:focus,
+        button:focus {
+            outline: 2px solid var(--primary);
+            outline-offset: 2px;
+        }
+
+        /* Print Styles */
+        @media print {
+            .alert-actions,
+            .card-actions {
+                display: none;
             }
-            to { 
-                opacity: 1;
-                transform: translateX(0);
+            
+            .main-content {
+                padding: 0;
             }
-        }
-
-        /* Loading States */
-        .loading {
-            opacity: 0.7;
-            pointer-events: none;
-        }
-
-        .loading::after {
-            content: '';
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 20px;
-            height: 20px;
-            margin: -10px 0 0 -10px;
-            border: 2px solid var(--primary);
-            border-top-color: transparent;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
-        /* Scrollbar Personalizada */
-        ::-webkit-scrollbar {
-            width: 8px;
-        }
-
-        ::-webkit-scrollbar-track {
-            background: var(--light-gray);
-        }
-
-        ::-webkit-scrollbar-thumb {
-            background: var(--gray);
-            border-radius: 4px;
-        }
-
-        ::-webkit-scrollbar-thumb:hover {
-            background: var(--primary);
+            
+            .kpi-card,
+            .content-card {
+                box-shadow: none;
+                border: 1px solid var(--gray-200);
+            }
         }
     </style>
 </head>
 <body>
-    <?php require __DIR__ . '/navbar.php'; ?>
+    <!-- Incluir Navbar -->
+    <?php include 'navbar.php'; ?>
 
-    <div class="container-fluid px-4 py-4">
-        <!-- Header Moderno -->
-        <div class="header-section animate-fade-in">
-            <div class="content">
-                <div class="d-flex justify-content-between align-items-center flex-wrap">
-                    <div>
-                        <h2><i class="fas fa-chart-line me-3"></i>Dashboard Ultra Multiservice</h2>
-                        <div class="subtitle">Bem-vindo de volta, <?= htmlspecialchars($_SESSION['user_name'] ?? 'Atendente') ?>! Aqui está o resumo do seu dia.</div>
+    <div class="main-content">
+        <!-- Executive Header -->
+        <div class="executive-header">
+            <div class="header-content">
+                <div class="brand-section">
+                    <div class="brand-logo">UL</div>
+                    <div class="brand-info">
+                        <h1>Ultra Limp</h1>
+                        <p class="brand-subtitle">Dashboard Executivo · Sistema de Gestão Profissional</p>
                     </div>
-                    <div class="d-flex gap-2 mt-3 mt-md-0">
-                        <button class="btn btn-outline-light btn-sm" title="Atualizar Dados" onclick="location.reload()">
-                            <i class="fas fa-sync-alt"></i>
-                        </button>
-                        <a href="/criar_orcamento.php" class="btn btn-light btn-sm" title="Criar Novo Orçamento">
-                            <i class="fas fa-plus me-2"></i>Novo Orçamento
-                        </a>
+                </div>
+                <div class="header-stats">
+                    <div class="stat-item">
+                        <div class="stat-value"><?php echo $funcionarios['funcionarios_ativos']; ?></div>
+                        <div class="stat-label">Equipe Online</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value"><?php echo $agendamentos['total_agendamentos']; ?></div>
+                        <div class="stat-label">Hoje</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value">98%</div>
+                        <div class="stat-label">Uptime</div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Mensagens -->
-        <?php if ($error): ?>
-            <div class="alert alert-danger alert-dismissible fade show animate-slide-up" role="alert">
-                <i class="fas fa-exclamation-triangle me-2"></i>
-                <?= htmlspecialchars($error) ?>
-                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        <!-- KPI Cards -->
+        <div class="kpi-grid">
+            <div class="kpi-card">
+                <div class="kpi-header">
+                    <div class="kpi-icon">
+                        <i class="fas fa-chart-line"></i>
+                    </div>
+                    <div class="kpi-trend <?php echo $percentualCrescimento >= 0 ? 'positive' : 'negative'; ?>">
+                        <i class="fas fa-arrow-<?php echo $percentualCrescimento >= 0 ? 'up' : 'down'; ?>"></i>
+                        <?php echo number_format(abs($percentualCrescimento), 1, ',', '.'); ?>%
+                    </div>
+                </div>
+                <div class="kpi-value"><?php echo formatarMoeda($receitaMensal); ?></div>
+                <div class="kpi-label">Receita Mensal</div>
+                <div class="kpi-subtitle">Meta: <?php echo formatarMoeda($performance['meta_mensal']); ?></div>
+                <div class="kpi-progress">
+                    <div class="kpi-progress-fill" style="width: <?php echo min(($receitaMensal / $performance['meta_mensal']) * 100, 100); ?>%"></div>
+                </div>
             </div>
-        <?php endif; ?>
-        <?php if ($success): ?>
-            <div class="alert alert-success alert-dismissible fade show animate-slide-up" role="alert">
-                <i class="fas fa-check-circle me-2"></i>
-                <?= htmlspecialchars($success) ?>
-                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-            </div>
-        <?php endif; ?>
 
-        <!-- Métricas Principais -->
-        <div class="row g-4 mb-4">
-            <div class="col-6 col-lg-3">
-                <div class="metric-card animate-slide-up" style="animation-delay: 0.1s">
-                    <div class="metric-icon" style="background: var(--gradient-primary);">
+            <div class="kpi-card">
+                <div class="kpi-header">
+                    <div class="kpi-icon">
+                        <i class="fas fa-calendar-check"></i>
+                    </div>
+                    <div class="kpi-trend">Hoje</div>
+                </div>
+                <div class="kpi-value"><?php echo $agendamentos['total_agendamentos']; ?></div>
+                <div class="kpi-label">Agendamentos</div>
+                <div class="kpi-subtitle"><?php echo $agendamentos['em_andamento']; ?> em andamento</div>
+            </div>
+
+            <div class="kpi-card">
+                <div class="kpi-header">
+                    <div class="kpi-icon">
+                        <i class="fas fa-users"></i>
+                    </div>
+                    <div class="kpi-trend">Ativos</div>
+                </div>
+                <div class="kpi-value"><?php echo $funcionarios['funcionarios_ativos']; ?>/<?php echo $funcionarios['total_funcionarios']; ?></div>
+                <div class="kpi-label">Equipe Presente</div>
+                <div class="kpi-subtitle"><?php echo $funcionarios['em_trabalho']; ?> em campo</div>
+            </div>
+
+            <div class="kpi-card">
+                <div class="kpi-header">
+                    <div class="kpi-icon">
+                        <i class="fas fa-tshirt"></i>
+                    </div>
+                    <div class="kpi-trend">Processando</div>
+                </div>
+                <div class="kpi-value"><?php echo $lavanderia['total_itens']; ?></div>
+                <div class="kpi-label">Itens Lavanderia</div>
+                <div class="kpi-subtitle"><?php echo $lavanderia['prontos']; ?> prontos para entrega</div>
+            </div>
+        </div>
+
+        <!-- Content Grid -->
+        <div class="content-grid">
+            <!-- Próximos Serviços -->
+            <div class="content-card">
+                <div class="card-header">
+                    <div class="card-title">
                         <i class="fas fa-calendar-day"></i>
-                    </div>
-                    <div class="metric-value"><?= (int)$orcamentos_dia ?></div>
-                    <div class="metric-label">Orçamentos Hoje</div>
-                    <div class="metric-trend text-success">
-                        <i class="fas fa-arrow-up"></i> +12% vs ontem
+                        Próximos Serviços Agendados
                     </div>
                 </div>
-            </div>
-            <div class="col-6 col-lg-3">
-                <div class="metric-card animate-slide-up" style="animation-delay: 0.2s">
-                    <div class="metric-icon" style="background: var(--gradient-secondary);">
-                        <i class="fas fa-money-bill-wave"></i>
-                    </div>
-                    <div class="metric-value">R$ <?= number_format((float)$valores_recebidos, 0, ',', '.') ?></div>
-                    <div class="metric-label">Valores Recebidos</div>
-                    <div class="metric-trend text-success">
-                        <i class="fas fa-arrow-up"></i> +8% vs mês passado
-                    </div>
+                <div class="card-content">
+                    <?php if (empty($proximosServicos)): ?>
+                        <div class="empty-state">
+                            <i class="fas fa-calendar-times"></i>
+                            <p>Nenhum serviço agendado</p>
+                        </div>
+                    <?php else: ?>
+                        <div class="services-timeline">
+                            <?php foreach ($proximosServicos as $servico): ?>
+                                <div class="timeline-item">
+                                    <div class="timeline-time">
+                                        <div class="time-hour"><?php echo formatarHora($servico['hora_agendamento']); ?></div>
+                                        <div class="time-date"><?php echo formatarData($servico['data_agendamento']); ?></div>
+                                    </div>
+                                    <div class="timeline-content">
+                                        <div class="service-info">
+                                            <h4><?php echo htmlspecialchars($servico['cliente']); ?></h4>
+                                            <div class="service-details">
+                                                <i class="fas fa-map-marker-alt"></i>
+                                                Limpeza Residencial
+                                            </div>
+                                        </div>
+                                        <span class="status-badge <?php echo strtolower(str_replace(' ', '-', $servico['status'])); ?>">
+                                            <?php echo $servico['status']; ?>
+                                        </span>
+                                    </div>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php endif; ?>
                 </div>
             </div>
-            <div class="col-6 col-lg-3">
-                <div class="metric-card animate-slide-up" style="animation-delay: 0.3s">
-                    <div class="metric-icon" style="background: var(--gradient-accent);">
-                        <i class="fas fa-hourglass-half"></i>
+
+            <!-- Entregas e Performance -->
+            <div style="display: flex; flex-direction: column; gap: var(--space-xl);">
+                <!-- Próximas Entregas -->
+                <div class="content-card">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <i class="fas fa-truck"></i>
+                            Entregas de Tapetes
+                        </div>
                     </div>
-                    <div class="metric-value">R$ <?= number_format((float)$valores_a_receber, 0, ',', '.') ?></div>
-                    <div class="metric-label">A Receber</div>
-                    <div class="metric-trend text-warning">
-                        <i class="fas fa-clock"></i> Pendente
+                    <div class="card-content">
+                        <?php if (empty($entregasTapetes)): ?>
+                            <div class="empty-state">
+                                <i class="fas fa-rug"></i>
+                                <p>Nenhuma entrega pendente</p>
+                            </div>
+                        <?php else: ?>
+                            <div class="deliveries-list">
+                                <?php foreach (array_slice($entregasTapetes, 0, 4) as $tapete): ?>
+                                    <div class="delivery-item">
+                                        <div class="delivery-icon">
+                                            <i class="fas fa-rug"></i>
+                                        </div>
+                                        <div class="delivery-info">
+                                            <div class="delivery-client"><?php echo htmlspecialchars($tapete['cliente']); ?></div>
+                                            <div class="delivery-date">
+                                                <i class="fas fa-calendar"></i>
+                                                <?php echo formatarData($tapete['data_prevista_entrega']); ?>
+                                            </div>
+                                        </div>
+                                        <div class="delivery-value"><?php echo formatarMoeda($tapete['valor_total_geral']); ?></div>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        <?php endif; ?>
                     </div>
                 </div>
-            </div>
-            <div class="col-6 col-lg-3">
-                <div class="metric-card animate-slide-up" style="animation-delay: 0.4s">
-                    <div class="metric-icon" style="background: linear-gradient(135deg, var(--info) 0%, #1E40AF 100%);">
-                        <i class="fas fa-folder-open"></i>
+
+                <!-- Performance -->
+                <div class="content-card">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <i class="fas fa-chart-bar"></i>
+                            Performance
+                        </div>
                     </div>
-                    <div class="metric-value"><?= (int)($status_orcamentos['abertos'] ?? 0) ?></div>
-                    <div class="metric-label">Orçamentos Abertos</div>
-                    <div class="metric-trend text-info">
-                        <i class="fas fa-eye"></i> Aguardando
+                    <div class="card-content">
+                        <div class="performance-metrics">
+                            <div class="metric-item">
+                                <div class="metric-info">
+                                    <h4>Satisfação Cliente</h4>
+                                    <div class="metric-description">Baseado em 247 avaliações</div>
+                                </div>
+                                <div class="metric-value-large"><?php echo number_format($performance['satisfacao_cliente'], 0); ?>%</div>
+                            </div>
+                            <div class="metric-item">
+                                <div class="metric-info">
+                                    <h4>Eficiência Operacional</h4>
+                                    <div class="metric-description">Tempo médio por serviço</div>
+                                </div>
+                                <div class="metric-value-large">2.3h</div>
+                            </div>
+                            <div class="metric-item">
+                                <div class="metric-info">
+                                    <h4>Taxa de Retenção</h4>
+                                    <div class="metric-description">Clientes recorrentes</div>
+                                </div>
+                                <div class="metric-value-large">94%</div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Status dos Orçamentos com Gráfico -->
-        <div class="dashboard-card animate-slide-up" style="animation-delay: 0.5s">
-            <div class="d-flex justify-content-between align-items-center mb-4">
-                <h5 class="fw-bold mb-0"><i class="fas fa-chart-pie me-2 text-primary"></i>Status dos Orçamentos</h5>
-                <button class="btn btn-outline-primary btn-sm" onclick="toggleChartView()">
-                    <i class="fas fa-chart-bar me-1"></i>Alternar Visualização
-                </button>
-            </div>
-            
-            <div id="statusCards" class="row g-3">
-                <?php 
-                $statusMapping = [
-                    'abertos'      => ['label' => 'Abertos', 'color' => 'info', 'icon' => 'folder-open'],
-                    'agendados'    => ['label' => 'Agendados', 'color' => 'primary', 'icon' => 'calendar-check'],
-                    'em_andamento' => ['label' => 'Em Andamento', 'color' => 'warning', 'icon' => 'cog'],
-                    'concluidos'   => ['label' => 'Concluídos', 'color' => 'success', 'icon' => 'check-circle'],
-                    'atrasados'    => ['label' => 'Atrasados', 'color' => 'danger', 'icon' => 'exclamation-triangle'],
-                    'cancelados'   => ['label' => 'Cancelados', 'color' => 'dark', 'icon' => 'times-circle']
-                ];
-                foreach ($statusMapping as $key => $info): 
-                ?>
-                    <div class="col-6 col-md-4 col-lg-2">
-                        <div class="status-card">
-                            <div class="mb-2">
-                                <i class="fas fa-<?= $info['icon'] ?> text-<?= $info['color'] ?> fa-lg"></i>
-                            </div>
-                            <div class="status-value text-<?= $info['color'] ?>">
-                                <?= (int)($status_orcamentos[$key] ?? 0) ?>
-                            </div>
-                            <div class="status-label"><?= $info['label'] ?></div>
+        <!-- Charts Section -->
+        <div class="content-grid">
+            <!-- Distribuição de Serviços -->
+            <div class="content-card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <i class="fas fa-chart-pie"></i>
+                        Distribuição de Serviços
+                    </div>
+                </div>
+                <div class="card-content">
+                    <div class="chart-container">
+                        <canvas id="serviceChart"></canvas>
+                    </div>
+                    <div class="chart-stats">
+                        <div class="stat-legend">
+                            <div class="legend-dot" style="background: #3b82f6;"></div>
+                            <div class="legend-text">Residencial (45%)</div>
+                        </div>
+                        <div class="stat-legend">
+                            <div class="legend-dot" style="background: #8b5cf6;"></div>
+                            <div class="legend-text">Comercial (30%)</div>
+                        </div>
+                        <div class="stat-legend">
+                            <div class="legend-dot" style="background: #f97316;"></div>
+                            <div class="legend-text">Tapetes (15%)</div>
+                        </div>
+                        <div class="stat-legend">
+                            <div class="legend-dot" style="background: #10b981;"></div>
+                            <div class="legend-text">Outros (10%)</div>
                         </div>
                     </div>
-                <?php endforeach; ?>
+                </div>
             </div>
-            
-            <div id="statusChart" class="chart-container" style="display: none;">
-                <canvas id="statusPieChart"></canvas>
+
+            <!-- Insights -->
+            <div class="content-card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <i class="fas fa-lightbulb"></i>
+                        Insights Executivos
+                    </div>
+                </div>
+                <div class="card-content">
+                    <div class="performance-metrics">
+                        <div class="metric-item">
+                            <div class="metric-info">
+                                <h4>Crescimento Mensal</h4>
+                                <div class="metric-description">Comparado ao mês anterior</div>
+                            </div>
+                            <div class="metric-value-large" style="color: var(--success);">+<?php echo number_format($percentualCrescimento, 1); ?>%</div>
+                        </div>
+                        <div class="metric-item">
+                            <div class="metric-info">
+                                <h4>Ticket Médio</h4>
+                                <div class="metric-description">Por serviço realizado</div>
+                            </div>
+                            <div class="metric-value-large">R$ 245</div>
+                        </div>
+                        <div class="metric-item">
+                            <div class="metric-info">
+                                <h4>ROI Marketing</h4>
+                                <div class="metric-description">Retorno sobre investimento</div>
+                            </div>
+                            <div class="metric-value-large" style="color: var(--success);">3.2x</div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
 
-        <!-- Conteúdo Principal em Tabs -->
-        <div class="dashboard-card animate-slide-up" style="animation-delay: 0.6s">
-            <ul class="nav nav-tabs" id="dashboardTabs" role="tablist">
-                <li class="nav-item" role="presentation">
-                    <button class="nav-link active" id="servicos-tab" data-bs-toggle="tab" data-bs-target="#servicos" type="button" role="tab">
-                        <i class="fas fa-tools me-2"></i>Serviços & Lavanderia
-                    </button>
-                </li>
-                <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="tickets-tab" data-bs-toggle="tab" data-bs-target="#tickets" type="button" role="tab">
-                        <i class="fas fa-ticket-alt me-2"></i>Tickets & Suporte
-                    </button>
-                </li>
-                <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="financeiro-tab" data-bs-toggle="tab" data-bs-target="#financeiro" type="button" role="tab">
-                        <i class="fas fa-chart-line me-2"></i>Financeiro
-                    </button>
-                </li>
-                <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="lembretes-tab" data-bs-toggle="tab" data-bs-target="#lembretes" type="button" role="tab">
-                        <i class="fas fa-bell me-2"></i>Lembretes
-                    </button>
-                </li>
-            </ul>
-            
-            <div class="tab-content" id="dashboardTabsContent">
-                <!-- Tab Serviços & Lavanderia -->
-                <div class="tab-pane fade show active" id="servicos" role="tabpanel">
-                    <div class="row g-4">
-                        <div class="col-lg-6">
-                            <div class="d-flex justify-content-between align-items-center mb-3">
-                                <h6 class="fw-bold mb-0"><i class="fas fa-tshirt me-2 text-info"></i>Lavanderia</h6>
-                                <a href="lavanderia_list.php" class="btn btn-sm btn-primary">
-                                    <i class="fas fa-eye"></i> Ver Todos
-                                </a>
-                            </div>
-                            <div class="lavanderia-list">
-                                <?php if(count($lavanderia) > 0): ?>
-                                    <?php foreach($lavanderia as $item): ?>
-                                        <div class="dashboard-item" data-bs-toggle="modal" data-bs-target="#lavanderiaModal-<?= $item['id'] ?>">
-                                            <i class="fas fa-tshirt text-info"></i>
-                                            <div class="info">
-                                                <?php
-                                                $first_item = !empty($item['itens']) ? $item['itens'][0] : null;
-                                                $item_name = $first_item ? htmlspecialchars($first_item['nome_item']) : 'N/A';
-                                                $item_count = $first_item ? count($item['itens']) : 0;
-                                                ?>
-                                                <span class="fw-semibold"><?= $item_name ?><?php if ($item_count > 1) echo " (+".($item_count-1).")"; ?></span>
-                                                <span class="text-muted"><?= htmlspecialchars($item['cliente']) ?></span>
-                                                <span class="text-muted">Previsão: <?= $item['data_prevista_entrega'] ? date('d/m/Y', strtotime($item['data_prevista_entrega'])) : 'N/A' ?></span>
-                                            </div>
-                                            <span class="badge bg-<?= match(strtolower($item['status'])) {
-                                                'em processamento' => 'warning',
-                                                'lavado' => 'info',
-                                                'pronto para retirada' => 'success',
-                                                default => 'secondary'
-                                            } ?>"><?= htmlspecialchars($item['status']) ?></span>
-                                        </div>
-                                    <?php endforeach; ?>
-                                <?php else: ?>
-                                    <div class="text-muted text-center py-4">
-                                        <i class="fas fa-tshirt fa-3x mb-3 opacity-25"></i>
-                                        <p>Nenhum item na lavanderia</p>
-                                    </div>
-                                <?php endif; ?>
-                            </div>
-                        </div>
-                        
-                        <div class="col-lg-6">
-                            <div class="d-flex justify-content-between align-items-center mb-3">
-                                <h6 class="fw-bold mb-0"><i class="fas fa-calendar-alt me-2 text-primary"></i>Próximos Serviços</h6>
-                                <a href="agenda.php" class="btn btn-sm btn-primary">
-                                    <i class="fas fa-calendar"></i> Ver Agenda
-                                </a>
-                            </div>
-                            <div class="servicos-list">
-                                <?php if(count($proximos_servicos) > 0): ?>
-                                    <?php foreach($proximos_servicos as $servico): ?>
-                                        <div class="dashboard-item">
-                                            <i class="fas fa-wrench text-primary"></i>
-                                            <div class="info">
-                                                <span class="fw-semibold">OS #<?= htmlspecialchars($servico['numero_ordem']) ?></span>
-                                                <span class="text-muted"><?= htmlspecialchars($servico['cliente_nome']) ?></span>
-                                                <span class="text-muted"><?= date('d/m/Y', strtotime($servico['data_servico'])) ?> às <?= date('H:i', strtotime($servico['hora_servico'])) ?></span>
-                                                <span class="text-muted">Técnico: <?= htmlspecialchars($servico['tecnico_nome'] ?? 'Não atribuído') ?></span>
-                                            </div>
-                                            <span class="badge bg-primary"><?= htmlspecialchars($servico['status']) ?></span>
-                                        </div>
-                                    <?php endforeach; ?>
-                                <?php else: ?>
-                                    <div class="text-muted text-center py-4">
-                                        <i class="fas fa-calendar-alt fa-3x mb-3 opacity-25"></i>
-                                        <p>Nenhum serviço agendado</p>
-                                    </div>
-                                <?php endif; ?>
-                            </div>
-                        </div>
+        <!-- Alertas Importantes -->
+        <div class="alerts-section">
+            <div class="alert-card warning">
+                <div class="alert-header">
+                    <div class="alert-icon">
+                        <i class="fas fa-exclamation-triangle"></i>
                     </div>
+                    <div class="alert-title">5 tapetes com prazo próximo</div>
                 </div>
-                
-                <!-- Tab Tickets & Suporte -->
-                <div class="tab-pane fade" id="tickets" role="tabpanel">
-                    <div class="row g-4">
-                        <div class="col-lg-6">
-                            <div class="d-flex justify-content-between align-items-center mb-3">
-                                <h6 class="fw-bold mb-0"><i class="fas fa-ticket-alt me-2 text-warning"></i>Meus Tickets</h6>
-                                <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#criarTicketModal">
-                                    <i class="fas fa-plus"></i> Novo Ticket
-                                </button>
-                            </div>
-                            <div class="tickets-list">
-                                <?php if(count($tickets_atendente) > 0): ?>
-                                    <?php foreach($tickets_atendente as $ticket): ?>
-                                        <div class="dashboard-item">
-                                            <i class="fas fa-ticket-alt text-<?= match($ticket['prioridade']) {
-                                                'alta' => 'danger',
-                                                'media' => 'warning',
-                                                'baixa' => 'info',
-                                                default => 'secondary'
-                                            } ?>"></i>
-                                            <div class="info">
-                                                <span class="fw-semibold"><?= htmlspecialchars($ticket['titulo']) ?></span>
-                                                <span class="text-muted">Para: <?= htmlspecialchars($ticket['tecnico_nome'] ?? 'Não atribuído') ?></span>
-                                                <span class="text-muted"><?= date('d/m/Y H:i', strtotime($ticket['created_at'])) ?></span>
-                                            </div>
-                                            <div class="d-flex align-items-center gap-2">
-                                                <span class="badge bg-<?= match($ticket['prioridade']) {
-                                                    'alta' => 'danger',
-                                                    'media' => 'warning',
-                                                    'baixa' => 'info',
-                                                    default => 'secondary'
-                                                } ?>"><?= ucfirst($ticket['prioridade']) ?></span>
-                                                <span class="badge bg-<?= match($ticket['status']) {
-                                                    'aberto' => 'primary',
-                                                    'em_andamento' => 'warning',
-                                                    'resolvido' => 'success',
-                                                    'fechado' => 'dark',
-                                                    default => 'secondary'
-                                                } ?>"><?= ucfirst(str_replace('_', ' ', $ticket['status'])) ?></span>
-                                            </div>
-                                        </div>
-                                    <?php endforeach; ?>
-                                <?php else: ?>
-                                    <div class="text-muted text-center py-4">
-                                        <i class="fas fa-ticket-alt fa-3x mb-3 opacity-25"></i>
-                                        <p>Nenhum ticket criado</p>
-                                    </div>
-                                <?php endif; ?>
-                            </div>
-                        </div>
-                        
-                        <div class="col-lg-6">
-                            <div class="d-flex justify-content-between align-items-center mb-3">
-                                <h6 class="fw-bold mb-0"><i class="fas fa-headset me-2 text-success"></i>Tickets Técnicos</h6>
-                                <a href="tickets.php" class="btn btn-sm btn-primary">
-                                    <i class="fas fa-list"></i> Ver Todos
-                                </a>
-                            </div>
-                            <div class="tickets-tecnico-list">
-                                <?php if(count($tickets_tecnico) > 0): ?>
-                                    <?php foreach($tickets_tecnico as $ticket): ?>
-                                        <div class="dashboard-item" data-bs-toggle="modal" data-bs-target="#responderTicketModal-<?= $ticket['id'] ?>">
-                                            <i class="fas fa-headset text-<?= match($ticket['prioridade']) {
-                                                'alta' => 'danger',
-                                                'media' => 'warning',
-                                                'baixa' => 'info',
-                                                default => 'secondary'
-                                            } ?>"></i>
-                                            <div class="info">
-                                                <span class="fw-semibold"><?= htmlspecialchars($ticket['titulo']) ?></span>
-                                                <span class="text-muted">De: <?= htmlspecialchars($ticket['tecnico_nome'] ?? 'Técnico') ?></span>
-                                                <span class="text-muted"><?= date('d/m/Y H:i', strtotime($ticket['created_at'])) ?></span>
-                                            </div>
-                                            <div class="d-flex align-items-center gap-2">
-                                                <span class="badge bg-<?= match($ticket['prioridade']) {
-                                                    'alta' => 'danger',
-                                                    'media' => 'warning',
-                                                    'baixa' => 'info',
-                                                    default => 'secondary'
-                                                } ?>"><?= ucfirst($ticket['prioridade']) ?></span>
-                                                <button class="btn btn-sm btn-success" title="Responder">
-                                                    <i class="fas fa-reply"></i>
-                                                </button>
-                                            </div>
-                                        </div>
-                                    <?php endforeach; ?>
-                                <?php else: ?>
-                                    <div class="text-muted text-center py-4">
-                                        <i class="fas fa-headset fa-3x mb-3 opacity-25"></i>
-                                        <p>Nenhum ticket técnico pendente</p>
-                                    </div>
-                                <?php endif; ?>
-                            </div>
-                        </div>
-                    </div>
+                <div class="alert-message">
+                    Verifique os prazos de entrega para esta semana. Alguns clientes podem precisar de comunicação proativa sobre o status.
                 </div>
-                
-                <!-- Tab Financeiro -->
-                <div class="tab-pane fade" id="financeiro" role="tabpanel">
-                    <div class="row g-4">
-                        <div class="col-12">
-                            <div class="d-flex justify-content-between align-items-center mb-3">
-                                <h6 class="fw-bold mb-0"><i class="fas fa-chart-line me-2 text-success"></i>Contas do Mês</h6>
-                                <a href="financeiro.php" class="btn btn-sm btn-primary">
-                                    <i class="fas fa-calculator"></i> Ver Relatório
-                                </a>
-                            </div>
-                            
-                            <div class="chart-container mb-4">
-                                <canvas id="financeiroChart"></canvas>
-                            </div>
-                            
-                            <div class="contas-list">
-                                <?php if(count($contas) > 0): ?>
-                                    <?php foreach($contas as $conta): ?>
-                                        <div class="dashboard-item">
-                                            <i class="fas fa-<?= $conta['tipo'] === 'pagar' ? 'arrow-down' : 'arrow-up' ?> text-<?= $conta['tipo'] === 'pagar' ? 'danger' : 'success' ?>"></i>
-                                            <div class="info">
-                                                <span class="fw-semibold"><?= htmlspecialchars($conta['descricao']) ?></span>
-                                                <span class="text-muted">R$ <?= number_format((float)$conta['valor'], 2, ',', '.') ?></span>
-                                                <span class="text-muted">Vencimento: <?= date('d/m/Y', strtotime($conta['data_vencimento'])) ?></span>
-                                            </div>
-                                            <span class="badge bg-<?= match($conta['status_atualizado']) {
-                                                'pago' => 'success',
-                                                'pendente' => 'warning',
-                                                'atrasado' => 'danger',
-                                                default => 'secondary'
-                                            } ?>"><?= ucfirst($conta['status_atualizado']) ?></span>
-                                        </div>
-                                    <?php endforeach; ?>
-                                <?php else: ?>
-                                    <div class="text-muted text-center py-4">
-                                        <i class="fas fa-chart-line fa-3x mb-3 opacity-25"></i>
-                                        <p>Nenhuma conta registrada este mês</p>
-                                    </div>
-                                <?php endif; ?>
-                            </div>
-                        </div>
-                    </div>
+                <div class="alert-actions">
+                    <button class="alert-btn">Ver Detalhes</button>
+                    <button class="alert-btn secondary">Notificar Equipe</button>
                 </div>
-                
-                <!-- Tab Lembretes -->
-                <div class="tab-pane fade" id="lembretes" role="tabpanel">
-                    <div class="row g-4">
-                        <div class="col-12">
-                            <div class="d-flex justify-content-between align-items-center mb-3">
-                                <h6 class="fw-bold mb-0"><i class="fas fa-bell me-2 text-warning"></i>Meus Lembretes</h6>
-                                <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#adicionarLembreteModal">
-                                    <i class="fas fa-plus"></i> Novo Lembrete
-                                </button>
-                            </div>
-                            <div class="lembretes-list">
-                                <?php if(count($lembretes) > 0): ?>
-                                    <?php foreach($lembretes as $lembrete): ?>
-                                        <div class="dashboard-item" data-bs-toggle="modal" data-bs-target="#verLembreteModal_<?= $lembrete['id'] ?>">
-                                            <i class="fas fa-bell text-warning"></i>
-                                            <div class="info">
-                                                <span class="fw-semibold"><?= htmlspecialchars(substr($lembrete['texto'], 0, 50) . (strlen($lembrete['texto']) > 50 ? '...' : '')) ?></span>
-                                                <span class="text-muted"><?= date('d/m/Y H:i', strtotime($lembrete['data_criacao'])) ?></span>
-                                            </div>
-                                            <div class="actions">
-                                                <a href="?concluir_lembrete=<?= $lembrete['id'] ?>" class="btn btn-sm btn-success" title="Concluir" onclick="event.stopPropagation();">
-                                                    <i class="fas fa-check"></i>
-                                                </a>
-                                                <a href="?excluir_lembrete=<?= $lembrete['id'] ?>" class="btn btn-sm btn-danger" title="Excluir" onclick="event.stopPropagation(); return confirm('Tem certeza que deseja excluir este lembrete?');">
-                                                    <i class="fas fa-trash"></i>
-                                                </a>
-                                            </div>
-                                        </div>
-                                    <?php endforeach; ?>
-                                <?php else: ?>
-                                    <div class="text-muted text-center py-4">
-                                        <i class="fas fa-bell fa-3x mb-3 opacity-25"></i>
-                                        <p>Nenhum lembrete ativo</p>
-                                        <button class="btn btn-primary mt-2" data-bs-toggle="modal" data-bs-target="#adicionarLembreteModal">
-                                            <i class="fas fa-plus me-2"></i>Criar Primeiro Lembrete
-                                        </button>
-                                    </div>
-                                <?php endif; ?>
-                            </div>
-                        </div>
+            </div>
+
+            <div class="alert-card success">
+                <div class="alert-header">
+                    <div class="alert-icon">
+                        <i class="fas fa-trophy"></i>
                     </div>
+                    <div class="alert-title">Meta de satisfação atingida!</div>
+                </div>
+                <div class="alert-message">
+                    Parabéns! Você alcançou 95% de satisfação este mês, superando a meta de 90%. Excelente trabalho da equipe.
+                </div>
+                <div class="alert-actions">
+                    <button class="alert-btn">Compartilhar</button>
+                    <button class="alert-btn secondary">Ver Relatório</button>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- AI Assistant (Elemento Surpreendente) -->
-    <div class="ai-assistant">
-        <button class="ai-assistant-btn" data-bs-toggle="modal" data-bs-target="#aiAssistantModal" title="Assistente IA">
-            <i class="fas fa-robot"></i>
-        </button>
-    </div>
-
-    <!-- Modal AI Assistant -->
-    <div class="modal fade" id="aiAssistantModal" tabindex="-1" aria-labelledby="aiAssistantModalLabel" aria-hidden="true">
-        <div class="modal-dialog modal-lg">
-            <div class="modal-content">
-                <div class="modal-header" style="background: var(--gradient-accent); color: white;">
-                    <h5 class="modal-title" id="aiAssistantModalLabel">
-                        <i class="fas fa-robot me-2"></i>Assistente IA Ultra
-                    </h5>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <div class="modal-body">
-                    <div class="ai-insights mb-4">
-                        <h6 class="fw-bold mb-3"><i class="fas fa-lightbulb me-2 text-warning"></i>Insights do Dia</h6>
-                        <div class="row g-3">
-                            <div class="col-md-6">
-                                <div class="alert alert-info">
-                                    <i class="fas fa-chart-line me-2"></i>
-                                    <strong>Performance:</strong> Seus orçamentos aumentaram 12% hoje!
-                                </div>
-                            </div>
-                            <div class="col-md-6">
-                                <div class="alert alert-warning">
-                                    <i class="fas fa-clock me-2"></i>
-                                    <strong>Atenção:</strong> 3 serviços agendados para amanhã.
-                                </div>
-                            </div>
-                            <div class="col-md-6">
-                                <div class="alert alert-success">
-                                    <i class="fas fa-money-bill-wave me-2"></i>
-                                    <strong>Financeiro:</strong> Meta mensal 78% atingida.
-                                </div>
-                            </div>
-                            <div class="col-md-6">
-                                <div class="alert alert-primary">
-                                    <i class="fas fa-users me-2"></i>
-                                    <strong>Equipe:</strong> Todos os técnicos disponíveis.
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="ai-suggestions">
-                        <h6 class="fw-bold mb-3"><i class="fas fa-magic me-2 text-primary"></i>Sugestões Inteligentes</h6>
-                        <div class="list-group">
-                            <div class="list-group-item">
-                                <div class="d-flex w-100 justify-content-between">
-                                    <h6 class="mb-1">Otimizar Agenda</h6>
-                                    <small>Agora</small>
-                                </div>
-                                <p class="mb-1">Reorganizar serviços de amanhã para reduzir tempo de deslocamento em 25%.</p>
-                                <button class="btn btn-sm btn-outline-primary">Aplicar Sugestão</button>
-                            </div>
-                            <div class="list-group-item">
-                                <div class="d-flex w-100 justify-content-between">
-                                    <h6 class="mb-1">Contatar Clientes</h6>
-                                    <small>Urgente</small>
-                                </div>
-                                <p class="mb-1">2 clientes com pagamentos em atraso. Enviar lembrete automático?</p>
-                                <button class="btn btn-sm btn-outline-warning">Enviar Lembretes</button>
-                            </div>
-                            <div class="list-group-item">
-                                <div class="d-flex w-100 justify-content-between">
-                                    <h6 class="mb-1">Análise de Tendências</h6>
-                                    <small>Semanal</small>
-                                </div>
-                                <p class="mb-1">Serviços de lavanderia têm maior margem de lucro. Considere promoção.</p>
-                                <button class="btn btn-sm btn-outline-success">Ver Análise</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Fechar</button>
-                    <button type="button" class="btn btn-primary">
-                        <i class="fas fa-comments me-2"></i>Chat com IA
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Modal Adicionar Lembrete -->
-    <div class="modal fade" id="adicionarLembreteModal" tabindex="-1" aria-labelledby="adicionarLembreteModalLabel" aria-hidden="true">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="adicionarLembreteModalLabel">
-                        <i class="fas fa-bell me-2"></i>Novo Lembrete
-                    </h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <form method="POST">
-                    <div class="modal-body">
-                        <div class="mb-3">
-                            <label for="texto_lembrete" class="form-label">Texto do Lembrete</label>
-                            <textarea class="form-control" id="texto_lembrete" name="texto_lembrete" rows="3" required placeholder="Digite seu lembrete aqui..."></textarea>
-                        </div>
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
-                        <button type="submit" name="adicionar_lembrete" class="btn btn-primary">
-                            <i class="fas fa-save me-2"></i>Salvar Lembrete
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
-
-    <!-- Scripts -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    
     <script>
-        // Dados para os gráficos
-        const statusData = {
-            labels: ['Abertos', 'Agendados', 'Em Andamento', 'Concluídos', 'Atrasados', 'Cancelados'],
-            data: [
-                <?= (int)($status_orcamentos['abertos'] ?? 0) ?>,
-                <?= (int)($status_orcamentos['agendados'] ?? 0) ?>,
-                <?= (int)($status_orcamentos['em_andamento'] ?? 0) ?>,
-                <?= (int)($status_orcamentos['concluidos'] ?? 0) ?>,
-                <?= (int)($status_orcamentos['atrasados'] ?? 0) ?>,
-                <?= (int)($status_orcamentos['cancelados'] ?? 0) ?>
-            ],
-            colors: ['#3B82F6', '#2563EB', '#F59E0B', '#10B981', '#EF4444', '#374151']
-        };
+        // Configuração dos gráficos
+        Chart.defaults.font.family = "'Inter', sans-serif";
+        Chart.defaults.font.size = 12;
+        Chart.defaults.color = '#64748b';
 
-        // Gráfico de Pizza para Status
-        let statusChart = null;
-        
-        function initStatusChart() {
-            const ctx = document.getElementById('statusPieChart').getContext('2d');
-            statusChart = new Chart(ctx, {
-                type: 'doughnut',
-                data: {
-                    labels: statusData.labels,
-                    datasets: [{
-                        data: statusData.data,
-                        backgroundColor: statusData.colors,
-                        borderWidth: 2,
-                        borderColor: '#ffffff'
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: {
-                            position: 'bottom',
-                            labels: {
-                                padding: 20,
-                                usePointStyle: true
+        // Gráfico de distribuição de serviços
+        const ctx = document.getElementById('serviceChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: <?php echo json_encode($distribuicao['labels']); ?>,
+                datasets: [{
+                    data: <?php echo json_encode($distribuicao['valores']); ?>,
+                    backgroundColor: ['#3b82f6', '#8b5cf6', '#f97316', '#10b981'],
+                    borderWidth: 0,
+                    hoverOffset: 8
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                        titleColor: 'white',
+                        bodyColor: 'white',
+                        borderColor: 'rgba(148, 163, 184, 0.2)',
+                        borderWidth: 1,
+                        cornerRadius: 8,
+                        displayColors: false,
+                        callbacks: {
+                            label: function(context) {
+                                return context.label + ': ' + context.parsed + '%';
                             }
                         }
                     }
+                },
+                cutout: '70%',
+                animation: {
+                    animateScale: true,
+                    duration: 1000
                 }
-            });
-        }
-
-        // Alternar visualização do gráfico
-        function toggleChartView() {
-            const cardsDiv = document.getElementById('statusCards');
-            const chartDiv = document.getElementById('statusChart');
-            
-            if (chartDiv.style.display === 'none') {
-                cardsDiv.style.display = 'none';
-                chartDiv.style.display = 'block';
-                if (!statusChart) {
-                    initStatusChart();
-                }
-            } else {
-                cardsDiv.style.display = 'flex';
-                chartDiv.style.display = 'none';
             }
-        }
-
-        // Gráfico Financeiro
-        function initFinanceiroChart() {
-            const ctx = document.getElementById('financeiroChart').getContext('2d');
-            new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: ['Sem 1', 'Sem 2', 'Sem 3', 'Sem 4'],
-                    datasets: [{
-                        label: 'Recebidos',
-                        data: [<?= (float)$valores_recebidos * 0.2 ?>, <?= (float)$valores_recebidos * 0.3 ?>, <?= (float)$valores_recebidos * 0.25 ?>, <?= (float)$valores_recebidos * 0.25 ?>],
-                        borderColor: '#10B981',
-                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                        tension: 0.4,
-                        fill: true
-                    }, {
-                        label: 'A Receber',
-                        data: [<?= (float)$valores_a_receber * 0.3 ?>, <?= (float)$valores_a_receber * 0.2 ?>, <?= (float)$valores_a_receber * 0.3 ?>, <?= (float)$valores_a_receber * 0.2 ?>],
-                        borderColor: '#F59E0B',
-                        backgroundColor: 'rgba(245, 158, 11, 0.1)',
-                        tension: 0.4,
-                        fill: true
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: {
-                            position: 'top'
-                        }
-                    },
-                    scales: {
-                        y: {
-                            beginAtZero: true,
-                            ticks: {
-                                callback: function(value) {
-                                    return 'R$ ' + value.toLocaleString('pt-BR');
-                                }
-                            }
-                        }
-                    }
-                }
-            });
-        }
-
-        // Inicializar quando o DOM estiver pronto
-        document.addEventListener('DOMContentLoaded', function() {
-            // Inicializar gráfico financeiro
-            initFinanceiroChart();
-            
-            // Adicionar animações aos elementos
-            const cards = document.querySelectorAll('.metric-card, .dashboard-card');
-            cards.forEach((card, index) => {
-                card.style.animationDelay = `${index * 0.1}s`;
-            });
-            
-            // Auto-refresh a cada 5 minutos
-            setInterval(() => {
-                const refreshBtn = document.querySelector('[title="Atualizar Dados"]');
-                if (refreshBtn) {
-                    refreshBtn.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i>';
-                    setTimeout(() => {
-                        location.reload();
-                    }, 1000);
-                }
-            }, 300000); // 5 minutos
         });
 
-        // Notificações em tempo real (simulação)
-        function showNotification(message, type = 'info') {
-            const notification = document.createElement('div');
-            notification.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
-            notification.style.cssText = 'top: 100px; right: 20px; z-index: 9999; min-width: 300px;';
-            notification.innerHTML = `
-                ${message}
-                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-            `;
-            document.body.appendChild(notification);
-            
-            setTimeout(() => {
-                notification.remove();
-            }, 5000);
+        // Animações e interações
+        document.addEventListener('DOMContentLoaded', function() {
+            // Animação das barras de progresso
+            const progressBars = document.querySelectorAll('.kpi-progress-fill');
+            const observer = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        const bar = entry.target;
+                        const width = bar.style.width;
+                        bar.style.width = '0%';
+                        setTimeout(() => {
+                            bar.style.width = width;
+                        }, 300);
+                    }
+                });
+            });
+
+            progressBars.forEach(bar => observer.observe(bar));
+
+            // Hover effects nos KPI cards
+            const kpiCards = document.querySelectorAll('.kpi-card');
+            kpiCards.forEach(card => {
+                card.addEventListener('mouseenter', function() {
+                    this.style.transform = 'translateY(-4px)';
+                });
+                
+                card.addEventListener('mouseleave', function() {
+                    this.style.transform = 'translateY(0)';
+                });
+            });
+
+            // Fechar alertas
+            const alertCloses = document.querySelectorAll('.alert-btn.secondary');
+            alertCloses.forEach(btn => {
+                if (btn.textContent.includes('Notificar') || btn.textContent.includes('Ver Relatório')) {
+                    btn.addEventListener('click', function() {
+                        const alertCard = this.closest('.alert-card');
+                        alertCard.style.transform = 'translateX(100%)';
+                        alertCard.style.opacity = '0';
+                        setTimeout(() => alertCard.remove(), 300);
+                    });
+                }
+            });
+
+            // Atualização automática do tempo
+            function updateTime() {
+                const now = new Date();
+                const timeString = now.toLocaleTimeString('pt-BR', {
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+                
+                // Atualizar indicador de tempo se existir
+                const timeIndicators = document.querySelectorAll('.time-indicator');
+                timeIndicators.forEach(indicator => {
+                    indicator.textContent = timeString;
+                });
+            }
+
+            setInterval(updateTime, 1000);
+            updateTime();
+
+            // Smooth scrolling
+            document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+                anchor.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    const target = document.querySelector(this.getAttribute('href'));
+                    if (target) {
+                        target.scrollIntoView({
+                            behavior: 'smooth',
+                            block: 'start'
+                        });
+                    }
+                });
+            });
+        });
+
+        // Função para atualizar dados (pode ser chamada via AJAX)
+        function refreshDashboard() {
+            // Implementar atualização via AJAX se necessário
+            console.log('Dashboard atualizado:', new Date().toLocaleTimeString());
         }
 
-        // Simular notificações
-        setTimeout(() => {
-            showNotification('<i class="fas fa-bell me-2"></i>Novo orçamento recebido!', 'success');
-        }, 10000);
-
-        setTimeout(() => {
-            showNotification('<i class="fas fa-clock me-2"></i>Lembrete: Reunião em 30 minutos', 'warning');
-        }, 20000);
+        // Auto-refresh opcional (descomentado se necessário)
+        // setInterval(refreshDashboard, 300000); // 5 minutos
     </script>
 </body>
 </html>
