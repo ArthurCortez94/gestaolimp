@@ -32,6 +32,8 @@ $performance = $dashboard->getPerformance();
     <title>Ultra Limp - Dashboard Executivo</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="styles.css" rel="stylesheet">
+    <link href="dashboard-components.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
@@ -793,9 +795,22 @@ $performance = $dashboard->getPerformance();
     <!-- Incluir Navbar -->
     <?php include 'navbar.php'; ?>
 
+    <!-- Partículas de Fundo Sutis -->
+    <div class="particles-bg">
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+    </div>
+
     <div class="main-content">
         <!-- Executive Header -->
-        <div class="executive-header">
+        <div class="executive-header gpu-optimized">
             <div class="header-content">
                 <div class="brand-section">
                     <div class="brand-logo">UL</div>
@@ -822,8 +837,8 @@ $performance = $dashboard->getPerformance();
         </div>
 
         <!-- KPI Cards -->
-        <div class="kpi-grid">
-            <div class="kpi-card">
+        <div class="kpi-grid staggered-entry">
+            <div class="kpi-card hover-glow-primary gpu-optimized" data-tooltip="Clique para ver detalhes da receita">
                 <div class="kpi-header">
                     <div class="kpi-icon">
                         <i class="fas fa-chart-line"></i>
@@ -841,7 +856,7 @@ $performance = $dashboard->getPerformance();
                 </div>
             </div>
 
-            <div class="kpi-card">
+            <div class="kpi-card hover-lift gpu-optimized tooltip-premium" data-tooltip="Visualizar agenda completa">
                 <div class="kpi-header">
                     <div class="kpi-icon">
                         <i class="fas fa-calendar-check"></i>
@@ -853,10 +868,11 @@ $performance = $dashboard->getPerformance();
                 <div class="kpi-subtitle"><?php echo $agendamentos['em_andamento']; ?> em andamento</div>
             </div>
 
-            <div class="kpi-card">
+            <div class="kpi-card hover-scale gpu-optimized tooltip-premium" data-tooltip="Gerenciar equipe">
                 <div class="kpi-header">
                     <div class="kpi-icon">
                         <i class="fas fa-users"></i>
+                        <span class="status-indicator-premium online"></span>
                     </div>
                     <div class="kpi-trend">Ativos</div>
                 </div>
@@ -865,7 +881,7 @@ $performance = $dashboard->getPerformance();
                 <div class="kpi-subtitle"><?php echo $funcionarios['em_trabalho']; ?> em campo</div>
             </div>
 
-            <div class="kpi-card">
+            <div class="kpi-card hover-glow-warning gpu-optimized tooltip-premium" data-tooltip="Acompanhar lavanderia">
                 <div class="kpi-header">
                     <div class="kpi-icon">
                         <i class="fas fa-tshirt"></i>
@@ -1068,8 +1084,8 @@ $performance = $dashboard->getPerformance();
         </div>
 
         <!-- Alertas Importantes -->
-        <div class="alerts-section">
-            <div class="alert-card warning">
+        <div class="alerts-section fade-in-sequence">
+            <div class="alert-card warning animated-border gpu-optimized">
                 <div class="alert-header">
                     <div class="alert-icon">
                         <i class="fas fa-exclamation-triangle"></i>
@@ -1080,12 +1096,12 @@ $performance = $dashboard->getPerformance();
                     Verifique os prazos de entrega para esta semana. Alguns clientes podem precisar de comunicação proativa sobre o status.
                 </div>
                 <div class="alert-actions">
-                    <button class="alert-btn">Ver Detalhes</button>
+                    <button class="alert-btn ripple-effect">Ver Detalhes</button>
                     <button class="alert-btn secondary">Notificar Equipe</button>
                 </div>
             </div>
 
-            <div class="alert-card success">
+            <div class="alert-card success hover-glow-success gpu-optimized">
                 <div class="alert-header">
                     <div class="alert-icon">
                         <i class="fas fa-trophy"></i>
@@ -1096,7 +1112,7 @@ $performance = $dashboard->getPerformance();
                     Parabéns! Você alcançou 95% de satisfação este mês, superando a meta de 90%. Excelente trabalho da equipe.
                 </div>
                 <div class="alert-actions">
-                    <button class="alert-btn">Compartilhar</button>
+                    <button class="alert-btn ripple-effect">Compartilhar</button>
                     <button class="alert-btn secondary">Ver Relatório</button>
                 </div>
             </div>
@@ -1169,15 +1185,34 @@ $performance = $dashboard->getPerformance();
 
             progressBars.forEach(bar => observer.observe(bar));
 
-            // Hover effects nos KPI cards
+            // Hover effects nos KPI cards com ripple
             const kpiCards = document.querySelectorAll('.kpi-card');
             kpiCards.forEach(card => {
+                card.classList.add('ripple-effect');
+                
+                card.addEventListener('click', function(e) {
+                    const ripple = document.createElement('span');
+                    ripple.classList.add('ripple');
+                    this.appendChild(ripple);
+
+                    const rect = this.getBoundingClientRect();
+                    const size = Math.max(rect.width, rect.height);
+                    const x = e.clientX - rect.left - size / 2;
+                    const y = e.clientY - rect.top - size / 2;
+
+                    ripple.style.width = ripple.style.height = size + 'px';
+                    ripple.style.left = x + 'px';
+                    ripple.style.top = y + 'px';
+
+                    setTimeout(() => ripple.remove(), 600);
+                });
+                
                 card.addEventListener('mouseenter', function() {
-                    this.style.transform = 'translateY(-4px)';
+                    this.style.transform = 'translateY(-6px) scale(1.01)';
                 });
                 
                 card.addEventListener('mouseleave', function() {
-                    this.style.transform = 'translateY(0)';
+                    this.style.transform = 'translateY(0) scale(1)';
                 });
             });
 
@@ -1211,6 +1246,58 @@ $performance = $dashboard->getPerformance();
 
             setInterval(updateTime, 1000);
             updateTime();
+
+            // Animação dos valores dos KPIs
+            function animateKPIValues() {
+                const kpiValues = document.querySelectorAll('.kpi-value');
+                kpiValues.forEach(value => {
+                    const finalValue = value.textContent;
+                    const isMonetary = finalValue.includes('R$');
+                    const isPercentage = finalValue.includes('%');
+                    const isFraction = finalValue.includes('/');
+                    
+                    if (isMonetary) {
+                        const numericValue = parseFloat(finalValue.replace(/[^\d,]/g, '').replace(',', '.'));
+                        animateNumber(value, 0, numericValue, 1500, (val) => {
+                            return 'R$ ' + val.toLocaleString('pt-BR', {
+                                minimumFractionDigits: 0,
+                                maximumFractionDigits: 0
+                            });
+                        });
+                    } else if (isPercentage) {
+                        const numericValue = parseFloat(finalValue.replace('%', ''));
+                        animateNumber(value, 0, numericValue, 1200, (val) => val.toFixed(0) + '%');
+                    } else if (!isFraction) {
+                        const numericValue = parseFloat(finalValue);
+                        if (!isNaN(numericValue)) {
+                            animateNumber(value, 0, numericValue, 1000, (val) => Math.round(val).toString());
+                        }
+                    }
+                });
+            }
+
+            function animateNumber(element, start, end, duration, formatter) {
+                const startTime = performance.now();
+                element.classList.add('metric-value-animated');
+                
+                function update(currentTime) {
+                    const elapsed = currentTime - startTime;
+                    const progress = Math.min(elapsed / duration, 1);
+                    const easeOutCubic = 1 - Math.pow(1 - progress, 3);
+                    const current = start + (end - start) * easeOutCubic;
+                    
+                    element.textContent = formatter(current);
+                    
+                    if (progress < 1) {
+                        requestAnimationFrame(update);
+                    }
+                }
+                
+                requestAnimationFrame(update);
+            }
+
+            // Iniciar animação após carregamento
+            setTimeout(animateKPIValues, 500);
 
             // Smooth scrolling
             document.querySelectorAll('a[href^="#"]').forEach(anchor => {
